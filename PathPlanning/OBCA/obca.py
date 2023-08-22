@@ -271,7 +271,7 @@ def GetInitialDualVariable(ref_path, obstacles):
     return ref_L, ref_M
 
 def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
-    dmin = 0.0
+    dmin = 0.5
     obs_info = GetObstacleInfo(obstacles)
     N = ref_path.shape[1]
     # 定义变量
@@ -283,7 +283,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     # 权重矩阵
     R = ca.diag([0.5, 0.5])
     Rd = ca.diag([0.1, 0.1])
-    Q = ca.diag([0.1, 0.1, 0.1])
+    Q = ca.diag([0.0, 0.0, 0.0])
     # 目标函数
     object_function = 0
     for k in range(N - 1):
@@ -355,7 +355,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
 
     # 设置求解器
-    options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
+    options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
                'ipopt.acceptable_obj_change_tol': 1e-6}
     opti.solver('ipopt', options)
     sol = opti.solve()
@@ -369,7 +369,7 @@ if __name__ == '__main__':
     dt = 0.6
     u0 = np.array([[0], [0]])
     x0 = np.array([[-10], [9.5], [0], [0]])
-    xF = np.array([[0], [3], [np.pi / 2], [0]])
+    xF = np.array([[0], [1.0], [np.pi / 2], [0]])
     ego = {"max_vel": 2,  # 这里的数据取值来源于HybridAStar的car.py
            "max_steer": 0.6,
            "max_acc": 0.4,
@@ -387,7 +387,7 @@ if __name__ == '__main__':
                  # [(-0, 10), (-0, 13), (2, 13), (2, 10), (-0, 10)],
                  ]
     x_coords, y_coords = zip(*map)
-    XYBound = [min(x_coords), max(x_coords), min(y_coords), max(y_coords)]
+    XYBound = [min(x_coords), max(x_coords), min(y_coords), max(y_coords) - np.sqrt(1.0 ** 2 + 3.3 ** 2)]
     XY_GRID_RESOLUTION = 0.2  # [m]
     YAW_GRID_RESOLUTION = np.deg2rad(3.0)  # [rad]
 
@@ -402,9 +402,9 @@ if __name__ == '__main__':
         plt.pause(0.0001)
 
     path = hybrid_a_star_planning(hy_x0[:3], hy_xF[:3], ox, oy, XY_GRID_RESOLUTION, YAW_GRID_RESOLUTION)
-    path.x_list = path.x_list[::3]
-    path.y_list = path.y_list[::3]
-    path.yaw_list = path.yaw_list[::3]
+    path.x_list = path.x_list[::2]
+    path.y_list = path.y_list[::2]
+    path.yaw_list = path.yaw_list[::2]
 
     obstacles = [[(-15, 0), (-15, 5), (-1.5, 5), (-1.5, 0)],
                  [(1.5, 0), (1.5, 5), (15, 5)],
@@ -421,9 +421,9 @@ if __name__ == '__main__':
         for t_x, t_y, t_yaw in zip(trajectory[0], trajectory[1], trajectory[2]):
             plt.cla()
             plt.plot(ox, oy, ".k")
-            plt.plot(x, y, "-r", label="Hybrid A* path")
-            # plt.plot(x, y, "or", label="path")
+            plt.plot(path.x_list, path.y_list, "-k", label="Hybrid A* path")
+            plt.plot(x, y, "-r", label="OBCA path")
             plt.grid(True)
             plot_car(t_x, t_y, t_yaw)
             plt.axis("equal")
-            plt.pause(0.005)
+            plt.pause(0.05)

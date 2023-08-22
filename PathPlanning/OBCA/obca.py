@@ -345,22 +345,22 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
         opti.subject_to(l >= 0)
         opti.subject_to(mu >= 0)
 
-        # 设置初始值
-        opti.set_initial(X, ref_path)
-        opti.set_initial(U, ref_input)
-        # ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles)
-        # opti.set_initial(L, ref_L)
-        # opti.set_initial(M, ref_M)
-        opti.set_initial(L, np.ones((obs_info["vnum"], N)))
-        opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
+    # 设置初始值
+    opti.set_initial(X, ref_path)
+    opti.set_initial(U, ref_input)
+    # ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles)
+    # opti.set_initial(L, ref_L)
+    # opti.set_initial(M, ref_M)
+    opti.set_initial(L, np.ones((obs_info["vnum"], N)))
+    opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
 
-        # 设置求解器
-        options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
-                   'ipopt.acceptable_obj_change_tol': 1e-6}
-        opti.solver('ipopt', options)
-        sol = opti.solve()
-        trajectory = sol.value(X)
-        input = sol.value(U)
+    # 设置求解器
+    options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
+               'ipopt.acceptable_obj_change_tol': 1e-6}
+    opti.solver('ipopt', options)
+    sol = opti.solve()
+    trajectory = sol.value(X)
+    input = sol.value(U)
 
     return trajectory, input
 
@@ -406,19 +406,6 @@ if __name__ == '__main__':
     path.y_list = path.y_list[::3]
     path.yaw_list = path.yaw_list[::3]
 
-    x = path.x_list
-    y = path.y_list
-    yaw = path.yaw_list
-
-    # if show_animation:
-    #     for i_x, i_y, i_yaw in zip(x, y, yaw):
-    #         plt.cla()
-    #         plt.plot(ox, oy, ".k")
-    #         plt.plot(x, y, "-r", label="Hybrid A* path")
-    #         plt.grid(True)
-    #         plt.axis("equal")
-    #         plot_car(i_x, i_y, i_yaw)
-    #         plt.pause(0.0001)
     obstacles = [[(-15, 0), (-15, 5), (-1.5, 5), (-1.5, 0)],
                  [(1.5, 0), (1.5, 5), (15, 5)],
                  # [(-0, 10), (-0, 13), (2, 13), (2, 10), (-0, 10)],
@@ -426,13 +413,17 @@ if __name__ == '__main__':
     ref_path, ref_input = GetReferenceFromHybirdAStar(path, ego, x0, dt)
     trajectory, input = planning(x0, xF, u0, ego, XYBound, obstacles, ref_path, ref_input, dt)
 
-    if show_animation:
-        plt.cla()
-        plt.plot(ox, oy, ".k")
-        # plt.plot(x, y, "-r", label="Hybrid A* path")
-        plt.plot(x, y, "or", label="path")
-        plt.plot(trajectory[0], trajectory[1], "xk", label="traj")
+    x = trajectory[0]
+    y = trajectory[1]
+    yaw = trajectory[2]
 
-        plt.grid(True)
-        plt.axis("equal")
-        plt.pause(0.0001)
+    if show_animation:
+        for t_x, t_y, t_yaw in zip(trajectory[0], trajectory[1], trajectory[2]):
+            plt.cla()
+            plt.plot(ox, oy, ".k")
+            plt.plot(x, y, "-r", label="Hybrid A* path")
+            # plt.plot(x, y, "or", label="path")
+            plt.grid(True)
+            plot_car(t_x, t_y, t_yaw)
+            plt.axis("equal")
+            plt.pause(0.005)

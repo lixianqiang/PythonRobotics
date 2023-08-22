@@ -335,15 +335,15 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
 
         for m in range(obs_info['num']):
             idx, vidx, A_all, b_all = obs_info['idx'][m], obs_info['vidx'][m], obs_info['A'], obs_info['b']
-        mu = M[idx[0]:idx[1], k]
-        l = L[vidx[0]:vidx[1], k]
-        A = ca.MX(A_all[vidx[0]:vidx[1], :])
-        b = ca.MX(b_all[vidx[0]:vidx[1]])
-        opti.subject_to(-g.T @ mu + (A @ T - b).T @ l > dmin)  # -g'*mu + (A*t - b)*lambda > dmin
-        opti.subject_to(G.T @ mu + Rot.T @ A.T @ l == 0)  # G'*mu + R'*A*lambda = 0
-        opti.subject_to(ca.norm_2(A.T @ l) <= 1)  # norm(A'*lambda) <= 1
-        opti.subject_to(l >= 0)
-        opti.subject_to(mu >= 0)
+            mu = M[idx[0]:idx[1], k]
+            l = L[vidx[0]:vidx[1], k]
+            A = ca.MX(A_all[vidx[0]:vidx[1], :])
+            b = ca.MX(b_all[vidx[0]:vidx[1]])
+            opti.subject_to(-g.T @ mu + (A @ T - b).T @ l > dmin)  # -g'*mu + (A*t - b)*lambda > dmin
+            opti.subject_to(G.T @ mu + Rot.T @ A.T @ l == 0)  # G'*mu + R'*A*lambda = 0
+            opti.subject_to(ca.norm_2(A.T @ l) <= 1)  # norm(A'*lambda) <= 1
+            opti.subject_to(l >= 0)
+            opti.subject_to(mu >= 0)
 
     # 设置初始值
     opti.set_initial(X, ref_path)

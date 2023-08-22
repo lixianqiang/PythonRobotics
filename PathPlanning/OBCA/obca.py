@@ -198,18 +198,53 @@ def GetObstacleInfo(obstacle_list):
     return obs_info
 
 
+# def GetHyperPlaneParam(obj):
+#     # 论文假定障碍物的轮廓点以顺时针方式存放，并且满足Ax<b，其物理含义，障碍物被定义为由轮廓点顺时针所连接成的向量（超平面）的右侧。那么其法向量应该正交于超平面并指向左侧
+#     # 即法向量是超平面以逆时针方向旋转90度得到，对于这种情况存在一种这样的关系 a = [vx, vy]， b = 【-vy, vx】所以这里与论文提供的源代码是等价
+#     A = np.zeros((len(obj) - 1, 2))
+#     b = np.zeros((len(obj) - 1, 1))
+#     for i in range(len(obj) - 1):
+#         v1 = obj[i]
+#         v2 = obj[i + 1]
+#         dx = v2[0] - v1[0]
+#         dy = v2[1] - v1[1]
+#         A[i, :] = np.array([[-dy, dx]])
+#         b[i] = -v1[0] * dy + v1[1] * dx
+#     return A, b
+
+# tt=np.array([[15],[0]]);yy=np.array([[1.5],[5]]);cc=np.array([[1.5],[0]]);dd=np.array([[15],[5]])
 def GetHyperPlaneParam(obj):
-    # 论文假定障碍物的轮廓点以顺时针方式存放，并且满足Ax<b，其物理含义，障碍物被定义为由轮廓点顺时针所连接成的向量（超平面）的右侧。那么其法向量应该正交于超平面并指向左侧
-    # 即法向量是超平面以逆时针方向旋转90度得到，对于这种情况存在一种这样的关系 a = [vx, vy]， b = 【-vy, vx】所以这里与论文提供的源代码是等价
     A = np.zeros((len(obj) - 1, 2))
     b = np.zeros((len(obj) - 1, 1))
     for i in range(len(obj) - 1):
         v1 = obj[i]
         v2 = obj[i + 1]
-        dx = v2[0] - v1[0]
-        dy = v2[1] - v1[1]
-        A[i, :] = np.array([[-dy, dx]])
-        b[i] = -v1[0] * dy + v1[1] * dx
+        if v1[0] == v2[0]:
+            if v2[1] < v1[1]:
+                A_tmp = np.array([[1, 0]])
+                b_tmp = v1[0]
+            else:
+                A_tmp = np.array([[-1, 0]])
+                b_tmp = -v1[0]
+        elif v1[1] == v2[1]:
+            if v1[0] < v2[0]:
+                A_tmp = np.array([[0, 1]])
+                b_tmp = v1[1]
+            else:
+                A_tmp = [0, -1]
+                b_tmp = -v1[1]
+        else:
+            ab = np.linalg.solve(np.array([[v1[0], 1], [v2[0], 1]]), np.array([[v1[1]], [v2[1]]]))
+            ai = ab[0,0]
+            bi = ab[1,0]
+            if v1[0] < v2[0]:
+                A_tmp = np.array([[-ai, 1]])
+                b_tmp = bi
+            else:
+                A_tmp = np.array([[ai, -1]])
+                b_tmp = -bi
+        A[i, :] = A_tmp
+        b[i] = b_tmp
     return A, b
 
 

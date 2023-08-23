@@ -263,7 +263,13 @@ def GetInitialDualVariable(ref_path, obstacles):
     objector_function = 0
     for k in range(N):
         for m in range(obs_info['num']):
-            objector_function = objector_function + -1 * D[m, k]
+            # objector_function = objector_function + -1 * D[m, k]
+            _, vidx, A_all, _ = obs_info['idx'][m], obs_info['vidx'][m], obs_info['A'], obs_info['b']
+            l = ca.MX(L[vidx[0]:vidx[1], k])
+            A = ca.MX(A_all[vidx[0]:vidx[1], :])
+            norm2_square=ca.sumsqr(A.T @ l)
+            objector_function = objector_function + D[m, k] + 0.5*norm2_square
+
     opti.minimize(objector_function)
 
     # 约束条件
@@ -275,7 +281,7 @@ def GetInitialDualVariable(ref_path, obstacles):
     g = ca.MX(np.array([[ego["length"] / 2], [ego["width"] / 2], [ego["length"] / 2], [ego["width"] / 2]]))
     G = ca.MX(np.array([[1, 0], [0, -1], [-1, 0], [0, 1]]))
     # 障碍物约束
-    for k in range(N - 1):
+    for k in range(N):
         Rot = ca.MX(np.array([[ca.cos(X[2, k]), -ca.sin(X[2, k])],
                               [ca.sin(X[2, k]), ca.cos(X[2, k])]]))
         T = ca.MX(np.array([[X[0, k] + ca.cos(X[2, k]) * ego["rear2center"]],
@@ -286,20 +292,28 @@ def GetInitialDualVariable(ref_path, obstacles):
             l = L[vidx[0]:vidx[1], k]
             A = ca.MX(A_all[vidx[0]:vidx[1], :])
             b = ca.MX(b_all[vidx[0]:vidx[1]])
-            opti.subject_to(-g.T @ mu + (A @ T - b).T @ l == D[m, k])  # -g'*mu + (A*t - b)*lambda
+            # opti.subject_to(-g.T @ mu + (A @ T - b).T @ l == D[m, k])  # -g'*mu + (A*t - b)*lambda
+            opti.subject_to(-g.T @ mu + (A @ T - b).T @ l + D[m, k] == 0)  # -g'*mu + (A*t - b)*lambda +dm==0
             opti.subject_to(G.T @ mu + Rot.T @ A.T @ l == 0)  # G'*mu + R'*A*lambda = 0
-            opti.subject_to(ca.norm_2(A.T @ l) <= 1)  # norm(A'*lambda) <= 1
+            # opti.subject_to(ca.norm_2(A.T @ l) <= 1)  # norm(A'*lambda) <= 1
+            opti.subject_to(D[m, k] < 0)
 
     # 设置初始值
     opti.set_initial(L, np.zeros((obs_info['vnum'], N)))
     opti.set_initial(M, np.zeros((obs_info['num'] * 4, N)))
-    opti.set_initial(D, np.zeros((obs_info['num'], N)))
+    # opti.set_initial(D, np.zeros((obs_info['num'], N)))
+    opti.set_initial(D, -1*np.ones((obs_info['num'], N)))
 
     # 设置求解器
     # options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
     #            'ipopt.acceptable_obj_change_tol': 1e-6}
     # sol = opti.solver('ipopt', options)
-    sol = opti.solver('ipopt')
+    # sol = opti.solver('ipopt')
+    # ref_L = sol.value(L)
+    # ref_M = sol.value(M)
+
+    opti.solver('ipopt')
+    sol = opti.solve()
     ref_L = sol.value(L)
     ref_M = sol.value(M)
 
@@ -383,11 +397,11 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     # 设置初始值
     opti.set_initial(X, ref_path)
     opti.set_initial(U, ref_input)
-    # ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles)
-    # opti.set_initial(L, ref_L)
-    # opti.set_initial(M, ref_M)
-    opti.set_initial(L, np.ones((obs_info["vnum"], N)))
-    opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
+    ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles)
+    opti.set_initial(L, ref_L)
+    opti.set_initial(M, ref_M)
+    # opti.set_initial(L, np.ones((obs_info["vnum"], N)))
+    # opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
 
     # 设置求解器
     options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
@@ -445,6 +459,9 @@ if __name__ == '__main__':
                  [(1.5, 0), (1.5, 5), (15, 5)],
                  # [(-0, 10), (-0, 13), (2, 13), (2, 10), (-0, 10)],
                  ]
+
+
+
     ref_path, ref_input = GetReferenceFromHybirdAStar(path, ego, x0, dt)
     trajectory, input = planning(x0, xF, u0, ego, XYBound, obstacles, ref_path, ref_input, dt)
 

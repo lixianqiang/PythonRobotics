@@ -263,8 +263,7 @@ def GetInitialDualVariable(ref_path, obstacles):
     objector_function = 0
     for k in range(N):
         for m in range(obs_info['num']):
-            # objector_function = objector_function + -1 * D[m, k]
-            _, vidx, A_all, _ = obs_info['idx'][m], obs_info['vidx'][m], obs_info['A'], obs_info['b']
+            vidx, A_all = obs_info['vidx'][m], obs_info['A']
             l = ca.MX(L[vidx[0]:vidx[1], k])
             A = ca.MX(A_all[vidx[0]:vidx[1], :])
             norm2_square=ca.sumsqr(A.T @ l)
@@ -292,27 +291,19 @@ def GetInitialDualVariable(ref_path, obstacles):
             l = L[vidx[0]:vidx[1], k]
             A = ca.MX(A_all[vidx[0]:vidx[1], :])
             b = ca.MX(b_all[vidx[0]:vidx[1]])
-            # opti.subject_to(-g.T @ mu + (A @ T - b).T @ l == D[m, k])  # -g'*mu + (A*t - b)*lambda
             opti.subject_to(-g.T @ mu + (A @ T - b).T @ l + D[m, k] == 0)  # -g'*mu + (A*t - b)*lambda +dm==0
             opti.subject_to(G.T @ mu + Rot.T @ A.T @ l == 0)  # G'*mu + R'*A*lambda = 0
-            # opti.subject_to(ca.norm_2(A.T @ l) <= 1)  # norm(A'*lambda) <= 1
             opti.subject_to(D[m, k] < 0)
 
     # 设置初始值
     opti.set_initial(L, np.zeros((obs_info['vnum'], N)))
     opti.set_initial(M, np.zeros((obs_info['num'] * 4, N)))
-    # opti.set_initial(D, np.zeros((obs_info['num'], N)))
     opti.set_initial(D, -1*np.ones((obs_info['num'], N)))
 
     # 设置求解器
-    # options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
-    #            'ipopt.acceptable_obj_change_tol': 1e-6}
-    # sol = opti.solver('ipopt', options)
-    # sol = opti.solver('ipopt')
-    # ref_L = sol.value(L)
-    # ref_M = sol.value(M)
-
-    opti.solver('ipopt')
+    options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
+               'ipopt.acceptable_obj_change_tol': 1e-6}
+    opti.solver('ipopt', options)
     sol = opti.solve()
     ref_L = sol.value(L)
     ref_M = sol.value(M)
@@ -400,8 +391,6 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles)
     opti.set_initial(L, ref_L)
     opti.set_initial(M, ref_M)
-    # opti.set_initial(L, np.ones((obs_info["vnum"], N)))
-    # opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
 
     # 设置求解器
     options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,

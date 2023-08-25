@@ -271,11 +271,6 @@ def GetInitialDualVariable(ref_path, obstacles):
 
     opti.minimize(objector_function)
 
-    # 约束条件
-    for k in range(N):
-        opti.subject_to(L[:, k] >= 0)
-        opti.subject_to(M[:, k] >= 0)
-
     # 车辆边界描述
     g = ca.MX(np.array([[ego["length"] / 2], [ego["width"] / 2], [ego["length"] / 2], [ego["width"] / 2]]))
     G = ca.MX(np.array([[1, 0], [0, -1], [-1, 0], [0, 1]]))
@@ -294,6 +289,8 @@ def GetInitialDualVariable(ref_path, obstacles):
             opti.subject_to(-g.T @ mu + (A @ T - b).T @ l + D[m, k] == 0)  # -g'*mu + (A*t - b)*lambda +dm==0
             opti.subject_to(G.T @ mu + Rot.T @ A.T @ l == 0)  # G'*mu + R'*A*lambda = 0
             opti.subject_to(D[m, k] < 0)
+            opti.subject_to(l >= 0)
+            opti.subject_to(mu >= 0)
 
     # 设置初始值
     opti.set_initial(L, np.zeros((obs_info['vnum'], N)))

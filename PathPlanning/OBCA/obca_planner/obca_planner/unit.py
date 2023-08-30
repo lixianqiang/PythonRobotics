@@ -54,17 +54,17 @@ def ExtractRectangularContourPoints(center_pose, contour_shape):
     length, width = contour_shape[0], contour_shape[1]
     half_width = width / 2
     half_length = length / 2
-    
-    x_top_left = x - half_width * math.cos(theta) + half_length * math.sin(theta)
-    y_top_left = y - half_width * math.sin(theta) - half_length * math.cos(theta)
-    
-    x_top_right = x + half_width * math.cos(theta) + half_length * math.sin(theta)
-    y_top_right = y + half_width * math.sin(theta) - half_length * math.cos(theta)
 
-    x_bottom_right = x + half_width * math.cos(theta) - half_length * math.sin(theta)
-    y_bottom_right = y + half_width * math.sin(theta) + half_length * math.cos(theta)
+    x_top_left = x - half_length* math.cos(theta) - half_width * math.sin(theta)
+    y_top_left = y - half_length * math.sin(theta) + half_width * math.cos(theta)
+    
+    x_top_right = x + half_length * math.cos(theta) - half_width * math.sin(theta)
+    y_top_right = y + half_length * math.sin(theta) + half_width * math.cos(theta)
 
-    x_bottom_left = x - half_width * math.cos(theta) - half_length * math.sin(theta)
-    y_bottom_left = y - half_width * math.sin(theta) + half_length * math.cos(theta)
+    x_bottom_right = x + half_length * math.cos(theta) + half_width * math.sin(theta)
+    y_bottom_right = y + half_length * math.sin(theta) - half_width * math.cos(theta)
+
+    x_bottom_left = x - half_length * math.cos(theta) + half_width * math.sin(theta)
+    y_bottom_left = y - half_length * math.sin(theta) - half_width * math.cos(theta)
 
     return [(x_top_left, y_top_left), (x_top_right, y_top_right), (x_bottom_right, y_bottom_right), (x_bottom_left, y_bottom_left), (x_top_left, y_top_left)]

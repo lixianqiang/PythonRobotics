@@ -14,8 +14,8 @@ import pathlib
 import casadi as ca
 import numpy as np
 
-sys.path.append(str(pathlib.Path(__file__).parent.parent))
-from HybridAStar.hybrid_a_star import *
+# sys.path.append(str(pathlib.Path(__file__).parent.parent))
+# from HybridAStar.hybrid_a_star import *
 
 show_animation = True
 
@@ -248,7 +248,7 @@ def GetHyperPlaneParam(obj):
     return A, b
 
 
-def GetInitialDualVariable(ref_path, obstacles):
+def GetInitialDualVariable(ref_path, obstacles, ego):
     obs_info = GetObstacleInfo(obstacles)
     N = ref_path.shape[1]
     X = ref_path[:3, :]
@@ -385,7 +385,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     # 设置初始值
     opti.set_initial(X, ref_path)
     opti.set_initial(U, ref_input)
-    ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles)
+    ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles, ego)
     opti.set_initial(L, ref_L)
     opti.set_initial(M, ref_M)
 

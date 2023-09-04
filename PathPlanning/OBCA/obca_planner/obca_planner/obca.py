@@ -320,7 +320,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     # 权重矩阵
     R = ca.diag([0.5, 0.5])
     Rd = ca.diag([0.1, 0.1])
-    Q = ca.diag([0.0, 0.0, 0.0])
+    Q = ca.diag([0.1, 0.1, 0.1])
     # 目标函数
     object_function = 0
     for k in range(N - 1):

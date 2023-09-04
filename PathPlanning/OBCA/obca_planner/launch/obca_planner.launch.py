@@ -19,11 +19,12 @@ def generate_launch_description():
             remappings=[
                 ('~/input/map', '/map/vector_map'),
                 ('~/input/goal_pose', '/planning/mission_planning/goal'),
-                ('~/input/trajectory', '/planning/scenario_planning/parking/trajectory'),
+                ('~/input/trajectory', '/planning/scenario_planning/parking/hyridAStar/trajectory'),
                 ('~/input/obstacles', '/perception/object_recognition/objects'),
                 ("~/input/odometry", "/localization/kinematic_state"),
                 ("~/input/acceleration", "/localization/acceleration"),
                 ("~/input/steering", "/vehicle/status/steering_status"),
+                ("~/output/trajectory", "/planning/scenario_planning/parking/trajectory")
             ],
             parameters=[vehicle_info_param]
         )]

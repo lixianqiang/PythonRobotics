@@ -48,6 +48,13 @@ def ConvertQuaternionToYaw(quaternion):
     yaw = math.atan2(t0, t1)
     return yaw
 
+def ConvertYawToQuaternion(yaw):
+    quaternion = [0.0, 0.0, 0.0, 0.0]
+    quaternion[0] = 0.0
+    quaternion[1] = 0.0
+    quaternion[2] = math.sin(yaw / 2.0)
+    quaternion[3] = math.cos(yaw / 2.0)
+    return quaternion
 
 def ExtractRectangularContourPoints(center_pose, contour_shape):
     x, y, theta = center_pose[0], center_pose[1], center_pose[2]
@@ -68,3 +75,16 @@ def ExtractRectangularContourPoints(center_pose, contour_shape):
     y_bottom_left = y - half_length * math.sin(theta) - half_width * math.cos(theta)
 
     return [(x_top_left, y_top_left), (x_top_right, y_top_right), (x_bottom_right, y_bottom_right), (x_bottom_left, y_bottom_left), (x_top_left, y_top_left)]
+
+
+if __name__ == '__main__':
+    quat1 = [0.0, 0.0,0.53729960834682389, 0.84339144581288561]
+    quat2 = [0.0, 0.0, 0.53740123327716438,0.84332669498373092]
+    yaw1 = ConvertQuaternionToYaw(quat1)
+    yaw1_deg = np.rad2deg(yaw1)
+    yaw2 = ConvertQuaternionToYaw(quat2)
+    yaw2_deg = np.rad2deg(yaw2)
+    angdiff = AngleDiff(yaw2, yaw1)
+    angdiff_deg = np.rad2deg(angdiff)
+    a = 0
+

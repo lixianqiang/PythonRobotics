@@ -156,7 +156,7 @@ def OnSteeringCallBack(msg):
 def CalculateReferenceInput(ref_path):
     steer_list = []
     x_list, y_list, vel_list = ref_path[0], ref_path[1], ref_path[3]
-    orientation = vel_list[0]
+    orientation = np.sign(vel_list[0])
     for i in range(1, len(x_list) - 1):
         if (vel_list[i - 1] * vel_list[i] < 0):
             orientation = -1 * orientation
@@ -339,7 +339,7 @@ def Preprocessor(traj, robot):
             yaw_list.pop(i)
             vel_list.pop(i)
     sign = None
-    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[3])) < np.pi / 2):
+    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
         sign = 1
         vel_list[0] = sign * 1.3888
     else:
@@ -367,7 +367,7 @@ def GetSegmentIndex(traj, robot):
     y_list = traj[1, :]
     sign = None
     sign_list = []
-    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[3])) < np.pi / 2):
+    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
         sign = 1
     else:
         sign = -1

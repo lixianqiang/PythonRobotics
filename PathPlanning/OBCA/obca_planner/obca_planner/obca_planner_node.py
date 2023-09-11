@@ -73,8 +73,7 @@ has_new_goal = None
 
 
 def IsDiffPose(p1: Pose, p2: Pose, dist_err, ang_err):
-    dist_square = (p1.position.x - p2.position.x) ** 2 + (p1.position.y - p2.position.y) ** 2 + (
-            p1.position.z - p2.position.z) ** 2
+    dist_square = (p1.position.x - p2.position.x) ** 2 + (p1.position.y - p2.position.y) ** 2
     quat1 = [p1.orientation.x, p1.orientation.y, p1.orientation.z, p1.orientation.w]
     quat2 = [p2.orientation.x, p2.orientation.y, p2.orientation.z, p2.orientation.w]
     angle1 = ConvertQuaternionToYaw(quat1)
@@ -293,7 +292,7 @@ def Preprocessor2(traj, robot):
     sign = None
     p1 = [x_list[0], y_list[0]]
     p2 = [x_list[1], y_list[1]]
-    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[3])) < np.pi / 2):
+    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
         sign = 1
         yaw_list[0] = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
         vel_list[0] = sign * 1.3888

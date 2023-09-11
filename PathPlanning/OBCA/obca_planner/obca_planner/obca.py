@@ -14,8 +14,6 @@ import pathlib
 import casadi as ca
 import numpy as np
 
-# sys.path.append(str(pathlib.Path(__file__).parent.parent))
-# from HybridAStar.hybrid_a_star import *
 
 show_animation = True
 
@@ -317,6 +315,8 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     U = opti.variable(2, N - 1)
     L = opti.variable(obs_info["vnum"], N)
     M = opti.variable(obs_info['num'] * 4, N)
+    Ts = opti.variable(1, N)
+
     # 权重矩阵
     R = ca.diag([0.5, 0.5])
     Rd = ca.diag([0.1, 0.1])
@@ -326,8 +326,10 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     for k in range(N - 1):
         object_function += ca.mtimes([U[:, k].T, R, U[:, k]])
     for k in range(1, N - 1):
-        object_function += ca.mtimes([((U[:, k] - U[:, k - 1]) / dt).T, Rd, (U[:, k] - U[:, k - 1]) / dt])
-    object_function += ca.mtimes([((U[:, 0] - u0) / dt).T, Rd, (U[:, 0] - u0) / dt])
+        object_function += ca.mtimes([((U[:, k] - U[:, k - 1]) / (Ts[k] * dt)).T, Rd, (U[:, k] - U[:, k - 1]) / (Ts[k] * dt)])
+    object_function += ca.mtimes([((U[:, 0] - u0) / (Ts[0]*dt)).T, Rd, (U[:, 0] - u0) / ((Ts[0]*dt))])
+    for k in range(N):
+        object_function += (0.5*Ts[k] + Ts[k] * Ts[k])
     for k in range(N):
         object_function += ca.mtimes([(X[:3, k] - ref_path[:3, k]).T, Q, X[:3, k] - ref_path[:3, k]])
     opti.minimize(object_function)
@@ -337,13 +339,13 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     opti.subject_to(X[:, -1] == xF)
 
     # 自行车运动学模型
-    func = lambda x, u, Ts: ca.vertcat(x[0] + Ts * x[3] * ca.cos(x[2]),
-                                       x[1] + Ts * x[3] * ca.sin(x[2]),
-                                       x[2] + Ts * x[3] * ca.tan(u[1]) / ego["wheel_base"],
-                                       x[3] + Ts * u[0])
+    func = lambda x, u, dT: ca.vertcat(x[0] + dT * x[3] * ca.cos(x[2]),
+                                       x[1] + dT * x[3] * ca.sin(x[2]),
+                                       x[2] + dT * x[3] * ca.tan(u[1]) / ego["wheel_base"],
+                                       x[3] + dT * u[0])
     # 运动学约束
     for k in range(N - 1):
-        opti.subject_to(X[:, k + 1] == func(X[:, k], U[:, k], dt))
+        opti.subject_to(X[:, k + 1] == func(X[:, k], U[:, k], Ts[k]*dt))
 
     # 状态约束
     for k in range(N):
@@ -357,8 +359,14 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
         opti.subject_to(opti.bounded(-ego["max_acc"], U[0, k], ego["max_acc"]))
         opti.subject_to(opti.bounded(-ego["max_steer"], U[1, k], ego["max_steer"]))
     for k in range(1, N - 1):
-        opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, k] - U[1, k - 1]) / dt, ego["max_steer_rate"]))
-    opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, 0] - u0[1]) / dt, ego["max_steer_rate"]))
+        opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, k] - U[1, k - 1]) / (Ts[0, k] * dt), ego["max_steer_rate"]))
+    opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, 0] - u0[1]) / (Ts[0,0]*dt), ego["max_steer_rate"]))
+
+    #时间约束
+    for k in range(1, N):
+        opti.subject_to(opti.bounded(0.8, Ts[k], 1.2))
+    for k in range(N-1):
+        opti.subject_to(Ts[k] == Ts[k+1])
 
     # 车辆边界描述
     g = ca.MX(np.array([[ego["length"] / 2], [ego["width"] / 2], [ego["length"] / 2], [ego["width"] / 2]]))
@@ -388,7 +396,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles, ego)
     opti.set_initial(L, ref_L)
     opti.set_initial(M, ref_M)
-
+    opti.set_initial(Ts,np.ones((1, N)))
     # 设置求解器
     options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
                'ipopt.acceptable_obj_change_tol': 1e-6}
@@ -396,11 +404,13 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     sol = opti.solve()
     trajectory = sol.value(X)
     input = sol.value(U)
-
+    dT = sol.value(Ts)
     return trajectory, input
 
 
 if __name__ == '__main__':
+    sys.path.append(str(pathlib.Path(__file__).parent.parent))
+    from HybridAStar.hybrid_a_star import *
     dt = 0.6
     u0 = np.array([[0], [0]])
     x0 = np.array([[-10], [9.5], [0], [0]])

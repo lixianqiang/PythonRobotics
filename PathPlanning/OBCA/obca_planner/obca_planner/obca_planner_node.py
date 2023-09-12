@@ -330,7 +330,7 @@ raw_data = {
 ref_path = None
 ref_input = None
 
-
+use_txt = False
 def OnTimer(node):
     global ego, traj_pub, raw_data, has_new_traj, trajectory, seg_idx_list, start_index, end_index, ref_path, ref_input
     if ego is None:
@@ -430,9 +430,9 @@ def GetVehicleInfo(node):
     node.get_logger().info("xxxxx right_overhang is {:.3f}".format(right_overhang))
     return vehicle_info
 
-use_txt = False
+record = False
 def OnTimer4Record(node):
-    record = False
+    global record
     if record:  # 在debug程序的时候手动设置为True,然后当程序退出后会生成对应文件
         def RecordAllData(node, raw_data):
             def write_array_to_text(array, file_path):
@@ -461,6 +461,49 @@ def OnTimer4Record(node):
             write_array_to_text(raw_ref_path, "raw_ref_path.txt")
         global raw_data, ego
         RecordAllData(node, raw_data)
+        record = False
+
+pub_init = False
+pub_goal = False
+def OnTimer4Init_Goal(node):
+    global pub_init
+    if pub_init:
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        init_pose_pub = node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 1)
+        init_pose = PoseWithCovarianceStamped()
+        p = Pose()
+        p.position.x = 3.243661880493164062e+01
+        p.position.y = -5.368216514587402344e+00
+        target_yaw = -3.132069106700981376e+00
+        quat = ConvertYawToQuaternion(target_yaw)
+        p.orientation.x = quat[0]
+        p.orientation.y = quat[1]
+        p.orientation.z = quat[2]
+        p.orientation.w = quat[3]
+
+        init_pose.pose.pose = p
+        init_pose.header.frame_id = "map"
+        init_pose.header.stamp = node.get_clock().now().to_msg()
+        init_pose_pub.publish(init_pose)
+        pub_init = False
+    global pub_goal
+    if pub_goal:
+        goal_pose_pub = node.create_publisher(PoseStamped, '/planning/mission_planning/goal', 1)
+        goal_pose = PoseStamped()
+        p = Pose()
+        p.position.x = 4.497026062011718750e+01
+        p.position.y = -7.964234828948974609e+00
+        target_yaw = 1.792877627312906119e+00
+        quat = ConvertYawToQuaternion(target_yaw)
+        p.orientation.x = quat[0]
+        p.orientation.y = quat[1]
+        p.orientation.z = quat[2]
+        p.orientation.w = quat[3]
+        goal_pose.pose = p
+        goal_pose.header.frame_id = "map"
+        goal_pose.header.stamp = node.get_clock().now().to_msg()
+        goal_pose_pub.publish(goal_pose)
+        pub_goal = False
 
 if __name__ == '__main__':
     rclpy.init()
@@ -506,6 +549,7 @@ if __name__ == '__main__':
     steer_sub = node.create_subscription(SteeringReport, '/vehicle/status/steering_status',
                                          OnSteeringCallBack, 10)
     timer4record = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer4Record, node))
+    timer4init_goal = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer4Init_Goal, node))
     timer = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer, node))
     rclpy.spin(node)
     node.destroy_node()

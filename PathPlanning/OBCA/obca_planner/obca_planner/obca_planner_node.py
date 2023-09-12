@@ -1,75 +1,16 @@
-import sys
-import casadi as ca
-import numpy as np
 import rclpy
-import math
-import copy
-
-from rclpy.node import Node
 from autoware_auto_planning_msgs.msg import Trajectory, TrajectoryPoint
 from autoware_auto_perception_msgs.msg import PredictedObjects
 from autoware_auto_vehicle_msgs.msg import SteeringReport
 from autoware_auto_mapping_msgs.msg import HADMapBin
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped, Pose, PoseArray
+from geometry_msgs.msg import PoseStamped, Pose, PoseArray, Point
 from geometry_msgs.msg import AccelWithCovarianceStamped
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, QoSDurabilityPolicy
 from obca_planner.obca import *
 from obca_planner.unit import *
-
-from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point
-
-# def SegmentPath(ref_path):
-#     x_list, y_list = ref_path[0], ref_path[1]
-#     shift_index_list = []
-#     for i in range(1, len(x_list) - 1):
-#         p1 = [x_list[i - 1], y_list[i - 1]]
-#         p2 = [x_list[i], y_list[i]]
-#         p3 = [x_list[i + 1], y_list[i + 1]]
-#         if (IsShiftPoint(p2, p1, p3)):
-#             shift_index_list.append(i)
-#     seg_path_list = []
-#     for i in range(len(shift_index_list) - 1):
-#         start_index = shift_index_list[i]
-#         end_index = shift_index_list[i + 1]
-#         seg_path = ref_path[:, start_index:end_index]
-#         seg_path_list.append(seg_path)
-#     return seg_path_list
-
-
-# def SamplePathByDistance(ref_path, sample_distance):
-#     for seg_path in all_path:
-#         x = seg_path[0]
-#         y = seg_path[1]
-#         spline = Spline2D(x, y)
-#         s = np.arange(0, spline.s[-1], sample_distance)
-#         if spline.s[-1] - spline.s[-1] <= 0.1:
-#             s = s[:-1]
-#         for i in range(len(s)):
-#             ix, iy = spline.calc_position(s[i])
-#             iyaw = spline.calc_yaw(s[i])
-#             rx.append(ix)
-#             ry.append(iy)
-#             ryaw.append(iyaw)
-#     return rx, ry, ryaw
-
-raw_traj = None
-has_new_traj = False
-raw_odom = None
-odom_buffer = []
-raw_goal = None
-raw_steer = None
-ego = None
-once = None
-all_traj = None
-node = None
-traj_pub = None
-raw_obs = None
-raw_acc = None
-seg_idx_list = []
-trajectory = None
-has_new_goal = None
+from visualization_msgs.msg import Marker
+import functools
 
 
 def IsDiffPose(p1: Pose, p2: Pose, dist_err, ang_err):
@@ -93,26 +34,42 @@ def IsDiffTraj(traj1: Trajectory, traj2: Trajectory):
     return False
 
 
-raw_map = None
-
-
 def OnMapCallBack(msg):
-    global raw_map
-    raw_map = msg
+    global raw_data
+    raw_data['map'] = msg
+
+
+error_val = None
 
 
 def OnTrajecotryCallBack(msg: Trajectory):
-    global raw_traj, has_new_traj, has_new_goal
-    if has_new_goal and len(msg.points) > 1:
-        # p1 = [raw_goal.pose.position.x, raw_goal.pose.position.y]
-        # p2 = [msg.points[-1].pose.position.x, msg.points[-1].pose.position.y]
-        if not IsDiffPose(raw_goal.pose, msg.points[-1].pose, 2.0, np.pi / 18):
-            raw_traj = msg
-            has_new_traj = True
-            has_new_goal = False
+    global raw_data, has_new_traj, has_new_goal, error_val
+    if len(msg.points) <= 1 or raw_data['goal'] is None: return
+    if raw_data['traj'] is None:
+        raw_data['traj'] = msg
+        has_new_traj = True
+        return
+    elif len(raw_data['traj'].points) != len(msg.points) or IsDiffPose(raw_data['traj'].points[-1].pose,
+                                                                       msg.points[-1].pose, 1e-2, 1e-2):
+        has_new_traj = True
+        raw_data['traj'] = msg
+        return
+    if has_new_traj:
+        p1 = raw_data['goal'].pose.position.x, raw_data['goal'].pose.position.y
+        p2 = raw_data['traj'].points[-1].pose.position.x, raw_data['traj'].points[-1].pose.position.y
+        if error_val is None:
+            error_val = CalcDistance(p1, p2)
+        elif math.fabs(CalcDistance(p1, p2) - error_val) > 1e-3:
+            error_val = CalcDistance(p1, p2)
 
 
 def HasStop(odom_buffer):
+    while len(odom_buffer) > 0:
+        time_diff = node.get_clock().now().seconds_nanoseconds()[0] - odom_buffer[0].header.stamp.sec
+        if time_diff < 3.0:
+            break
+        odom_buffer.pop(0)
+
     for i in range(len(odom_buffer)):
         if math.fabs(odom_buffer[i].twist.twist.linear.x) > 1e-3:
             return False
@@ -120,39 +77,33 @@ def HasStop(odom_buffer):
 
 
 def OnOdometryCallBack(msg):
-    global raw_odom, odom_buffer, node
-    raw_odom = msg
-    odom_buffer.append(raw_odom)
-    while len(odom_buffer) > 0:
-        time_diff = node.get_clock().now().seconds_nanoseconds()[0] - odom_buffer[0].header.stamp.sec
-        if time_diff < 3.0:
-            break
-        odom_buffer.pop(0)
+    global raw_data, odom_buffer
+    raw_data['odom'] = msg
+    odom_buffer.append(raw_data['odom'])
 
 
 def OnGoalCallBack(msg):
-    global raw_goal, has_new_goal
-    if raw_goal is None or IsDiffPose(raw_goal.pose, msg.pose, 0.1, np.pi / 18):
-        raw_goal = msg
-        has_new_goal = True
+    global raw_data
+    if raw_data['goal'] is None or IsDiffPose(raw_data['goal'].pose, msg.pose, 1e-3, 1e-3):
+        raw_data['goal'] = msg
 
 
 def OnObstacleCallBack(msg):
-    global raw_obs
-    raw_obs = msg
+    global raw_data
+    raw_data['obs'] = msg
 
 
 def OnAcclerationCallBack(msg):
-    global raw_acc
-    raw_acc = msg
+    global raw_data
+    raw_data['acc'] = msg
 
 
 def OnSteeringCallBack(msg):
-    global raw_steer
-    raw_steer = msg
+    global raw_data
+    raw_data['steer'] = msg
 
 
-def CalculateReferenceInput(ref_path):
+def CalculateReferenceInput(ref_path, u0=[0.0, 0.0]):
     steer_list = []
     x_list, y_list, vel_list = ref_path[0], ref_path[1], ref_path[3]
     orientation = np.sign(vel_list[0])
@@ -166,14 +117,20 @@ def CalculateReferenceInput(ref_path):
             p3 = [x_list[i + 1], y_list[i + 1]]
             k = CalcCurvature(p2, p1, p3)
             steer_list.append(orientation * math.atan2(0.5 * ego["wheel_base"] * k, 1))
-    steer_list.append(steer_list[-1])
-    acc_list = [0 for i in range(len(steer_list))]
+    steer_list.append(0.0) # steer_list.append(steer_list[-1])
+    # acc_list = [0 for i in range(len(steer_list))]
+    acc_list = []
+    for j in range(1, len(x_list) - 1):
+        if (vel_list[j - 1] * vel_list[j] < 0):
+            acc_list.append(0)
+        else:
+           acc_list.append(vel_list[j] - vel_list[j - 1])
+    acc_list.append(0)
     ref_input = np.vstack((acc_list, steer_list))
     return ref_input
 
 
-def ConvertDataFormat(data_type, data):
-    global node
+def ConvertDataFormat(node, data_type, data):
     if data_type == "trajectory":
         N = len(data.points)
         traj = np.zeros((4, N))
@@ -221,50 +178,23 @@ def ConvertDataFormat(data_type, data):
         return obstacle_list
     elif data_type == "map":
         pass
-    elif data_type == "numpy":
-        N = data.shape[1]
-        traj = Trajectory()
-        traj.header.stamp = node.get_clock().now().to_msg()
-        traj.header.frame_id = "map"
-        for i in range(N):
-            tp = TrajectoryPoint()
-            tp.pose.position.x = data[0, i]
-            tp.pose.position.y = data[1, i]
-            tp.pose.position.z = 0.0
-            quat = ConvertYawToQuaternion(data[2, i])
-            tp.pose.orientation.x = quat[0]
-            tp.pose.orientation.y = quat[1]
-            tp.pose.orientation.z = quat[2]
-            tp.pose.orientation.w = quat[3]
-            tp.longitudinal_velocity_mps = data[3, i]
-            traj.points.append(tp)
-        return traj
 
 
-def IsDataReady():
-    global raw_odom, raw_goal, raw_traj, raw_map, raw_acc, raw_steer
-    if raw_odom is None or raw_goal is None or raw_traj is None or raw_map is None:
+def IsDataReady(raw_data):
+    if raw_data['odom'] is None or raw_data['goal'] is None or raw_data['traj'] is None or raw_data['map'] is None:
         return False
-    if raw_acc is None:
-        init_acc = AccelWithCovarianceStamped()
-        init_acc.accel.accel.x = 0
-        raw_acc = init_acc
-    if raw_steer is None:
-        init_steer = SteeringReport()
-        init_steer.steering_tire_angle = 0
-        raw_steer = init_steer
     return True
 
 
-def UpdateTargetIndex(seg_idx_list):
-    global raw_odom, odom_buffer, start_index, end_index, all_traj, sidx
+def UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index):
+    global raw_data, odom_buffer, sidx
     has_finish = False
     if start_index is None or end_index is None:
         start_index = seg_idx_list[0][0]
         end_index = seg_idx_list[0][1]
         sidx = 0
-    p1 = [raw_odom.pose.pose.position.x, raw_odom.pose.pose.position.y]
-    p2 = [all_traj.points[end_index].pose.position.x, all_traj.points[end_index].pose.position.y]
+    p1 = [raw_data['odom'].pose.pose.position.x, raw_data['odom'].pose.pose.position.y]
+    p2 = [trajectory[0, end_index], trajectory[1, end_index]]
     if CalcDistance(p1, p2) < 1.0 and HasStop(odom_buffer):
         sidx += 1
         if sidx <= len(seg_idx_list) - 1:
@@ -276,7 +206,7 @@ def UpdateTargetIndex(seg_idx_list):
     return start_index, end_index, has_finish
 
 
-def Preprocessor2(traj, robot):
+def Postprocessor(traj, robot):
     x_list = traj[0, :].tolist()
     y_list = traj[1, :].tolist()
     yaw_list = traj[2, :].tolist()
@@ -325,80 +255,17 @@ def Preprocessor2(traj, robot):
     return new_traj, seg_idx_list
 
 
-def Preprocessor(traj, robot):
-    x_list = traj[0, :].tolist()
-    y_list = traj[1, :].tolist()
-    yaw_list = traj[2, :].tolist()
-    vel_list = traj[3, :].tolist()
-    # 去除重复节点
-    for i in range(len(x_list) - 1, 0, -1):
-        if (x_list[i] == x_list[i - 1] and y_list[i] == y_list[i - 1]):
-            x_list.pop(i)
-            y_list.pop(i)
-            yaw_list.pop(i)
-            vel_list.pop(i)
-    sign = None
-    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
-        sign = 1
-        vel_list[0] = sign * 1.3888
-    else:
-        sign = -1
-        vel_list[0] = sign * 1.3888
-    idx = 0
-    seg_idx_list = []
-    for i in range(1, len(x_list) - 1):
-        p1 = [x_list[i - 1], y_list[i - 1]]
-        p2 = [x_list[i], y_list[i]]
-        p3 = [x_list[i + 1], y_list[i + 1]]
-
-        if (IsShiftPoint(p2, p1, p3)):
-            sign = -1 * sign
-            seg_idx_list.append((idx, i))
-            idx = i
-        vel_list[i] = sign * 1.388
-
-    new_traj = np.vstack((x_list, y_list, yaw_list, vel_list))
-    return new_traj, seg_idx_list
-
-
-def GetSegmentIndex(traj, robot):
-    x_list = traj[0, :]
-    y_list = traj[1, :]
-    sign = None
-    sign_list = []
-    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
-        sign = 1
-    else:
-        sign = -1
-    sign_list.append(sign)
-    idx = 0
-    seg_idx_list = []
-    for i in range(1, len(x_list) - 1):
-        p1 = [x_list[i - 1], y_list[i - 1]]
-        p2 = [x_list[i], y_list[i]]
-        p3 = [x_list[i + 1], y_list[i + 1]]
-
-        if (IsShiftPoint(p2, p1, p3)):
-            sign = -1 * sign
-            seg_idx_list.append((idx, i))
-            idx = i
-        sign_list.append(sign)
-    seg_idx_list.append((idx, len(x_list) - 1))
-    return seg_idx_list, sign_list
-
-
-def plot_traj(traj):
+def plot_arrow(traj, topic):
     posearray = PoseArray()
     posearray.header.frame_id = 'map'
     posearray.header.stamp = node.get_clock().now().to_msg()
     for i in range(len(traj.points)):
         p = traj.points[i].pose
         posearray.poses.append(p)
-    plot_pub2 = node.create_publisher(PoseArray, "/obca_traj", 1)
-    plot_pub2.publish(posearray)
+    node.create_publisher(PoseArray, topic, 1).publish(posearray)
 
 
-def plot_traj2(traj):
+def plot_line(traj, topic, color=[1.0, 0.0, 0.0]):
     # 绘制轨迹点
     marker = Marker()
     marker.header.frame_id = "map"
@@ -407,7 +274,9 @@ def plot_traj2(traj):
     marker.action = Marker.ADD
     marker.scale.x = 0.1
     marker.color.a = 1.0
-    marker.color.g = 1.0
+    marker.color.g = color[0]
+    marker.color.b = color[1]
+    marker.color.r = color[2]
 
     traj_points = []
     for i in range(len(traj.points)):
@@ -417,43 +286,10 @@ def plot_traj2(traj):
         point.z = 0.0
         traj_points.append(point)
     marker.points = traj_points
-    plot_pub = node.create_publisher(Marker, "/obca_marker", 1)
-    plot_pub.publish(marker)
+    node.create_publisher(Marker, topic, 1).publish(marker)
 
 
-def GetSegmentTrajectory(trajecotry, start_index, end_index):
-    seg_traj = Trajectory()
-    seg_traj.header.stamp = node.get_clock().now().to_msg()
-    seg_traj.header.frame_id = 'map'
-
-    lp = Pose()
-    lp.position.x = trajectory[0, start_index]
-    lp.position.y = trajectory[1, start_index]
-    lp.position.z = 0.0
-    for i in range(start_index + 1, end_index):
-        tpnt = TrajectoryPoint()
-        tpnt.longitudinal_velocity_mps = np.sign(trajecotry[3, start_index + 1]) * 1.3888888359069824
-        cp = Pose()
-        cp.position.x = trajectory[0, i]
-        cp.position.y = trajectory[1, i]
-        cp.position.z = 0.0
-
-        dx = cp.position.x - lp.position.x
-        dy = cp.position.y - lp.position.y
-        yaw = math.atan2(dy, dx)
-        quat = ConvertYawToQuaternion(yaw)
-
-        lp.orientation.x = quat[0]
-        lp.orientation.y = quat[1]
-        lp.orientation.z = quat[2]
-        lp.orientation.w = quat[3]
-
-        tpnt.pose = lp
-        lp = cp
-        seg_traj.points.append(tpnt)
-    return seg_traj
-
-def GetSegmentTrajectory2(trajectory, start_index, end_index):
+def GetSegmentTrajectory(trajectory, start_index, end_index):
     seg_traj = Trajectory()
     seg_traj.header.stamp = node.get_clock().now().to_msg()
     seg_traj.header.frame_id = 'map'
@@ -470,54 +306,110 @@ def GetSegmentTrajectory2(trajectory, start_index, end_index):
         tp.longitudinal_velocity_mps = trajectory[3, i]
         seg_traj.points.append(tp)
     return seg_traj
-def OnTimer():
-    global ego, all_traj, start_index, end_index, has_new_traj, seg_idx_list, trajectory, traj_pub
-    if ego is None:
-        ego = GetVehicleInfo()
-    if not IsDataReady():
-        return
 
-    if has_new_traj:
+
+ego = None
+traj_pub = None
+has_new_traj = False
+trajectory = None
+seg_idx_list = []
+start_index = None
+end_index = None
+odom_buffer = []
+sidx = None
+raw_data = {
+    "traj": None,
+    "odom": None,
+    "goal": None,
+    "obs": None,
+    "acc": None,
+    "steer": None,
+    "map": None
+}
+
+ref_path = None
+ref_input = None
+
+
+def OnTimer(node):
+    global ego, traj_pub, raw_data, has_new_traj, trajectory, seg_idx_list, start_index, end_index, ref_path, ref_input
+    if ego is None:
+        ego = GetVehicleInfo(node)
+    if traj_pub is None:
+        traj_pub = node.create_publisher(Trajectory, '/planning/scenario_planning/parking/trajectory',
+                                         rclpy.qos.qos_profile_system_default)
+    global use_txt
+    if use_txt:
         start_index = None
         end_index = None
-        x0 = ConvertDataFormat("odometry", raw_odom)
-        xF = ConvertDataFormat("goal_pose", raw_goal)
-        u0 = np.array([[raw_acc.accel.accel.linear.x], [raw_steer.steering_tire_angle]])
-        ref_path = ConvertDataFormat("trajectory", raw_traj)
-        ref_input = CalculateReferenceInput(ref_path)
-        obstacles = ConvertDataFormat("obstacle", raw_obs)
-        XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat("map", raw_map)
+        x0, xF, u0, ref_path, ref_input, raw_ref_path = RecoverAllData()
+        obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
+        XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat(node, "map", raw_map)
         trajectory, input = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=0.5)
-        # trajectory, _ = Preprocessor(trajectory, x0)
-        # seg_idx_list, _ = GetSegmentIndex(trajectory, x0)
-        trajectory, seg_idx_list = Preprocessor2(trajectory, x0)
-
-        all_traj = ConvertDataFormat("numpy", trajectory)
+        trajectory, seg_idx_list = Postprocessor(trajectory, x0)
         has_new_traj = False
+    else:
+        if not IsDataReady(raw_data):
+            return
+        if has_new_traj:
+            start_index = None
+            end_index = None
+            x0 = ConvertDataFormat(node, "odometry", raw_data['odom'])
+            xF = ConvertDataFormat(node, "goal_pose", raw_data['goal'])
+            u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
+            ref_path = ConvertDataFormat(node, "trajectory", raw_data['traj'])
 
-    start_index, end_index, has_finish = UpdateTargetIndex(seg_idx_list)
-    # seg_traj = GetSegmentTrajectory(trajectory, start_index, end_index)
-    seg_traj = GetSegmentTrajectory2(trajectory, start_index, end_index)
-    traj_pub.publish(seg_traj)
-    plot_traj(seg_traj)
-    plot_traj2(all_traj)
+            ref_input = CalculateReferenceInput(ref_path, u0)
+            obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
+            XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat(node, "map", raw_map)
+            trajectory, input = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=0.5)
+            trajectory, seg_idx_list = Postprocessor(trajectory, x0)
+            has_new_traj = False
+
+    if trajectory is not None and seg_idx_list != []:
+        start_index, end_index, has_finish = UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index)
+
+        all_traj = GetSegmentTrajectory(trajectory, 0, trajectory.shape[1])
+        seg_traj = GetSegmentTrajectory(trajectory, start_index, end_index)
+        ref_path1 = GetSegmentTrajectory(ref_path, 0, ref_path.shape[1])
+
+        traj_pub.publish(seg_traj)
+        plot_arrow(all_traj, "/obca_all_traj_ori")
+        plot_arrow(seg_traj, "/obca_seg_traj_ori")
+        plot_arrow(ref_path1, "/obca_ref_path_ori")
+        plot_line(all_traj, "/obca_all_traj")
+        plot_line(seg_traj, "/obca_seg_traj")
+        plot_line(ref_path1, "/obca_ref_path")
+
+        temp_yaw = []
+        temp_yaw_car = []
+        temp_yaw_ref_input2 = []
+        ref_path2 = np.zeros(ref_path.shape)
+        for i in range(1, ref_input.shape[1]):
+            ref_path2[0, i] = ref_path[0, i]
+            ref_path2[1, i] = ref_path[1, i]
+            ref_path2[2, i] = ref_input[1, i - 1] + ref_path[2, i]
+            temp_yaw.append(np.rad2deg(ref_input[1, i - 1]))
+            temp_yaw_car.append(np.rad2deg(ref_path[2, i]))
+            temp_yaw_ref_input2.append(np.rad2deg(ref_input[1, i - 1] + ref_path[2, i]))
+        ref_path21 = GetSegmentTrajectory(ref_path2, 0, ref_path2.shape[1])
+        plot_arrow(ref_path21, "/obca_ref_input_ori")
 
 
-def GetVehicleInfo():
-    global node
-    max_vel = node.declare_parameter('vel_lim', 50.0).value
-    max_steer = node.declare_parameter('steer_lim', 1.0).value
-    max_acc = node.declare_parameter('vel_rate_lim', 7.0).value
-    max_steer_rate = node.declare_parameter('steer_rate_lim', 5.0).value
-    wheel_base = node.declare_parameter('wheel_base', 1.9).value
-    front_overhang = node.declare_parameter('front_overhang', 0.32).value
-    rear_overhang = node.declare_parameter('rear_overhang', 0.32).value
+def GetVehicleInfo(node):
+    max_vel = node.declare_parameter('vel_lim', 10.0).value  # robobus 10.0 sample 50.0
+    max_steer = node.declare_parameter('steer_lim', 1.0).value  # robobus 1.0 sample 1.0
+    max_acc = node.declare_parameter('vel_rate_lim', 3.0).value  # robobus 2.0 sample 7.0
+    max_steer_rate = node.declare_parameter('steer_rate_lim', 0.5).value  # robobus 5.0 sample 5.0
+    wheel_base = node.declare_parameter('wheel_base', 3.02).value  # robobus 3.020 sample 1.9
+    front_overhang = node.declare_parameter('front_overhang', 0.32).value  # robobus 0.400 sample 0.32
+    rear_overhang = node.declare_parameter('rear_overhang', 0.32).value  # robobus 0.400 sample 0.32
     vehicle_length = wheel_base + front_overhang + rear_overhang
-    wheel_tread = node.declare_parameter('wheel_tread', 1.465).value
-    left_overhang = node.declare_parameter('left_overhang', 0.0).value
-    right_overhang = node.declare_parameter('right_overhang', 0.0).value
+    wheel_tread = node.declare_parameter('wheel_tread', 1.465).value  # robobus 1.618 sample 1.465
+    left_overhang = node.declare_parameter('left_overhang', 0.0).value  # robobus 0.0 sample 0.0
+    right_overhang = node.declare_parameter('right_overhang', 0.0).value  # robobus 0.0 sample 0.0
     vehicle_width = wheel_tread + left_overhang + right_overhang
-    rear2center = vehicle_length / 2.0 - rear_overhang
+    rear2center = vehicle_length / 2.0 - rear_overhang # rear2center = 0
 
     vehicle_info = {
         "max_vel": max_vel,
@@ -530,12 +422,49 @@ def GetVehicleInfo():
         "rear_overhang": rear_overhang,
         "rear2center": rear2center
     }
+    node.get_logger().info("xxxxx wheel_base is {:.3f}".format(wheel_base))
+    node.get_logger().info("xxxxx front_overhang is {:.3f}".format(front_overhang))
+    node.get_logger().info("xxxxx rear_overhang is {:.3f}".format(rear_overhang))
+    node.get_logger().info("xxxxx wheel_tread is {:.3f}".format(wheel_tread))
+    node.get_logger().info("xxxxx left_overhang is {:.3f}".format(left_overhang))
+    node.get_logger().info("xxxxx right_overhang is {:.3f}".format(right_overhang))
     return vehicle_info
 
+use_txt = False
+def OnTimer4Record(node):
+    record = False
+    if record:  # 在debug程序的时候手动设置为True,然后当程序退出后会生成对应文件
+        def RecordAllData(node, raw_data):
+            def write_array_to_text(array, file_path):
+                with open(file_path, 'w') as file:
+                    np.savetxt(file, array, delimiter=',')
 
-def main(args=None):
-    global node, traj_pub
-    rclpy.init(args=args)
+            x0 = ConvertDataFormat(node, "odometry", raw_data['odom'])
+            xF = ConvertDataFormat(node, "goal_pose", raw_data['goal'])
+            u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
+            ref_path = ConvertDataFormat(node, "trajectory", raw_data['traj'])
+            ref_input = CalculateReferenceInput(ref_path)
+            raw_ref_path = np.zeros((7, len(raw_data['traj'].points)))
+            for i in range(len(raw_data['traj'].points)):
+                raw_ref_path[0, i] = raw_data['traj'].points[i].pose.position.x
+                raw_ref_path[1, i] = raw_data['traj'].points[i].pose.position.y
+                raw_ref_path[2, i] = raw_data['traj'].points[i].pose.orientation.x
+                raw_ref_path[3, i] = raw_data['traj'].points[i].pose.orientation.y
+                raw_ref_path[4, i] = raw_data['traj'].points[i].pose.orientation.z
+                raw_ref_path[5, i] = raw_data['traj'].points[i].pose.orientation.w
+                raw_ref_path[6, i] = raw_data['traj'].points[i].longitudinal_velocity_mps
+            write_array_to_text(x0, "x0.txt")
+            write_array_to_text(xF, "xF.txt")
+            write_array_to_text(u0, "u0.txt")
+            write_array_to_text(ref_path, "ref_path.txt")
+            write_array_to_text(ref_input, "ref_input.txt")
+            write_array_to_text(raw_ref_path, "raw_ref_path.txt")
+        global raw_data, ego
+        RecordAllData(node, raw_data)
+
+if __name__ == '__main__':
+    rclpy.init()
+
     node = rclpy.create_node('obca_planner_node')
     # 通过obca_planner.launch.py 启动时使用
     # map_sub = node.create_subscription(HADMapBin, '~/input/map', OnMapCallBack, QoSProfile(
@@ -550,30 +479,34 @@ def main(args=None):
     # goal_pose_sub = node.create_subscription(PoseStamped, '~/input/goal_pose', OnGoalCallBack, 10)
     # acc_sub = node.create_subscription(AccelWithCovarianceStamped, '~/input/acceleration', OnAcclerationCallBack, 10)
     # steer_sub = node.create_subscription(SteeringReport, '~/input/steering', OnSteeringCallBack, 10)
-    # traj_pub = node.create_publisher(Trajectory, '~/output/trajectory', 1)  
+    # traj_pub = node.create_publisher(Trajectory, '~/output/trajectory', 1)
 
     # 单独启动节点
-    map_sub = node.create_subscription(HADMapBin, '/map/vector_map', OnMapCallBack, QoSProfile(
-        reliability=ReliabilityPolicy.RELIABLE,
-        history=HistoryPolicy.KEEP_LAST,
-        durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
-        depth=1
-    ))
+    map_sub = node.create_subscription(HADMapBin, '/map/vector_map', OnMapCallBack,
+                                       QoSProfile(
+                                           reliability=ReliabilityPolicy.RELIABLE,
+                                           history=HistoryPolicy.KEEP_LAST,
+                                           durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                                           depth=1
+                                       ))
 
     traj_sub = node.create_subscription(Trajectory, '/planning/scenario_planning/parking/hyridAStar/trajectory',
-                                        OnTrajecotryCallBack, rclpy.qos.qos_profile_system_default)
-    obs_sub = node.create_subscription(PredictedObjects, '/perception/object_recognition/objects', OnObstacleCallBack,
+                                        OnTrajecotryCallBack,
+                                        rclpy.qos.qos_profile_system_default)
+    obs_sub = node.create_subscription(PredictedObjects, '/perception/object_recognition/objects',
+                                       OnObstacleCallBack,
                                        10)
-    odom_sub = node.create_subscription(Odometry, '/localization/kinematic_state', OnOdometryCallBack, 10)
-    goal_pose_sub = node.create_subscription(PoseStamped, '/planning/mission_planning/goal', OnGoalCallBack, 10)
-    acc_sub = node.create_subscription(AccelWithCovarianceStamped, '/localization/acceleration', OnAcclerationCallBack,
+    odom_sub = node.create_subscription(Odometry, '/localization/kinematic_state',
+                                        OnOdometryCallBack, 10)
+    goal_pose_sub = node.create_subscription(PoseStamped, '/planning/mission_planning/goal',
+                                             OnGoalCallBack, 10)
+    acc_sub = node.create_subscription(AccelWithCovarianceStamped, '/localization/acceleration',
+                                       OnAcclerationCallBack,
                                        10)
-    steer_sub = node.create_subscription(SteeringReport, '/vehicle/status/steering_status', OnSteeringCallBack, 10)
-    traj_pub = node.create_publisher(Trajectory, '/planning/scenario_planning/parking/trajectory',
-                                     rclpy.qos.qos_profile_system_default)
-
-    timer_period = 0.1
-    timer = node.create_timer(timer_period, OnTimer)
+    steer_sub = node.create_subscription(SteeringReport, '/vehicle/status/steering_status',
+                                         OnSteeringCallBack, 10)
+    timer4record = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer4Record, node))
+    timer = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer, node))
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

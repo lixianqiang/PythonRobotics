@@ -76,6 +76,19 @@ def ExtractRectangularContourPoints(center_pose, contour_shape):
 
     return [(x_top_left, y_top_left), (x_top_right, y_top_right), (x_bottom_right, y_bottom_right), (x_bottom_left, y_bottom_left), (x_top_left, y_top_left)]
 
+def RecoverAllData():
+    def load_array_from_text(file_name):
+        loaded_array = np.loadtxt(file_name, delimiter=',')
+        return loaded_array
+
+    x0 = load_array_from_text("x0.txt")
+    xF = load_array_from_text("xF.txt")
+    u0 = load_array_from_text("u0.txt")
+    ref_path = load_array_from_text("ref_path.txt")
+    ref_input = load_array_from_text("ref_input.txt")
+    raw_ref_path = load_array_from_text("raw_ref_path.txt")
+    return x0, xF, u0, ref_path, ref_input, raw_ref_path
+
 
 if __name__ == '__main__':
     quat1 = [0.0, 0.0,0.53729960834682389, 0.84339144581288561]

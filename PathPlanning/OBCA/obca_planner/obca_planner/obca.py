@@ -13,7 +13,7 @@ import sys
 import pathlib
 import casadi as ca
 import numpy as np
-
+from obca_planner.unit import *
 
 show_animation = True
 
@@ -233,8 +233,8 @@ def GetHyperPlaneParam(obj):
                 b_tmp = -v1[1]
         else:
             ab = np.linalg.solve(np.array([[v1[0], 1], [v2[0], 1]]), np.array([[v1[1]], [v2[1]]]))
-            ai = ab[0,0]
-            bi = ab[1,0]
+            ai = ab[0, 0]
+            bi = ab[1, 0]
             if v1[0] < v2[0]:
                 A_tmp = np.array([[-ai, 1]])
                 b_tmp = bi
@@ -264,8 +264,8 @@ def GetInitialDualVariable(ref_path, obstacles, ego):
             vidx, A_all = obs_info['vidx'][m], obs_info['A']
             l = ca.MX(L[vidx[0]:vidx[1], k])
             A = ca.MX(A_all[vidx[0]:vidx[1], :])
-            norm2_square=ca.sumsqr(A.T @ l)
-            objector_function = objector_function + D[m, k] + 0.5*norm2_square
+            norm2_square = ca.sumsqr(A.T @ l)
+            objector_function = objector_function + D[m, k] + 0.5 * norm2_square
 
     opti.minimize(objector_function)
 
@@ -293,7 +293,7 @@ def GetInitialDualVariable(ref_path, obstacles, ego):
     # 设置初始值
     opti.set_initial(L, np.zeros((obs_info['vnum'], N)))
     opti.set_initial(M, np.zeros((obs_info['num'] * 4, N)))
-    opti.set_initial(D, -1*np.ones((obs_info['num'], N)))
+    opti.set_initial(D, -1 * np.ones((obs_info['num'], N)))
 
     # 设置求解器
     options = {'ipopt.max_iter': 100, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
@@ -305,7 +305,7 @@ def GetInitialDualVariable(ref_path, obstacles, ego):
 
     return ref_L, ref_M
 
-def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
+def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=1.0):
     dmin = 0.5
     obs_info = GetObstacleInfo(obstacles)
     N = ref_path.shape[1]
@@ -320,16 +320,18 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     # 权重矩阵
     R = ca.diag([0.5, 0.5])
     Rd = ca.diag([0.1, 0.1])
-    Q = ca.diag([0.1, 0.1, 0.1])
+    Q = ca.diag([5, 5, 5])
     # 目标函数
     object_function = 0
     for k in range(N - 1):
         object_function += ca.mtimes([U[:, k].T, R, U[:, k]])
     for k in range(1, N - 1):
-        object_function += ca.mtimes([((U[:, k] - U[:, k - 1]) / (Ts[k] * dt)).T, Rd, (U[:, k] - U[:, k - 1]) / (Ts[k] * dt)])
-    object_function += ca.mtimes([((U[:, 0] - u0) / (Ts[0]*dt)).T, Rd, (U[:, 0] - u0) / ((Ts[0]*dt))])
+        object_function += ca.mtimes(
+            [((U[:, k] - U[:, k - 1]) / (Ts[k] * dt)).T, Rd, (U[:, k] - U[:, k - 1]) / (Ts[k] * dt)])
+    object_function += ca.mtimes([((U[:, 0] - u0) / (Ts[0] * dt)).T, Rd, (U[:, 0] - u0) / ((Ts[0] * dt))])
     for k in range(N):
-        object_function += (0.5*Ts[k] + Ts[k] * Ts[k])
+        # object_function += (5 * Ts[k] + Ts[k] * Ts[k])
+        object_function += (5 * Ts[k])
     for k in range(N):
         object_function += ca.mtimes([(X[:3, k] - ref_path[:3, k]).T, Q, X[:3, k] - ref_path[:3, k]])
     opti.minimize(object_function)
@@ -345,13 +347,13 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
                                        x[3] + dT * u[0])
     # 运动学约束
     for k in range(N - 1):
-        opti.subject_to(X[:, k + 1] == func(X[:, k], U[:, k], Ts[k]*dt))
+        opti.subject_to(X[:, k + 1] == func(X[:, k], U[:, k], Ts[k] * dt))
 
     # 状态约束
     for k in range(N):
         opti.subject_to(opti.bounded(XYbounds[0], X[0, k], XYbounds[1]))
         opti.subject_to(opti.bounded(XYbounds[2], X[1, k], XYbounds[3]))
-        opti.subject_to(opti.bounded(-np.inf, X[2, k], np.inf))
+        # opti.subject_to(opti.bounded(-np.inf, X[2, k], np.inf))
         opti.subject_to(opti.bounded(-ego["max_vel"], X[3, k], ego["max_vel"]))
 
     # 输入约束
@@ -359,14 +361,13 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
         opti.subject_to(opti.bounded(-ego["max_acc"], U[0, k], ego["max_acc"]))
         opti.subject_to(opti.bounded(-ego["max_steer"], U[1, k], ego["max_steer"]))
     for k in range(1, N - 1):
-        opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, k] - U[1, k - 1]) / (Ts[0, k] * dt), ego["max_steer_rate"]))
-    opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, 0] - u0[1]) / (Ts[0,0]*dt), ego["max_steer_rate"]))
+        opti.subject_to(
+            opti.bounded(-ego["max_steer_rate"], (U[1, k] - U[1, k - 1]) / (Ts[k] * dt), ego["max_steer_rate"]))
+    opti.subject_to(opti.bounded(-ego["max_steer_rate"], (U[1, 0] - u0[1]) / (Ts[0] * dt), ego["max_steer_rate"]))
 
-    #时间约束
-    for k in range(1, N):
-        opti.subject_to(opti.bounded(0.8, Ts[k], 1.2))
-    for k in range(N-1):
-        opti.subject_to(Ts[k] == Ts[k+1])
+    # 时间约束
+    for k in range(N - 1):
+        opti.subject_to(Ts[k] == Ts[k + 1])
 
     # 车辆边界描述
     g = ca.MX(np.array([[ego["length"] / 2], [ego["width"] / 2], [ego["length"] / 2], [ego["width"] / 2]]))
@@ -393,24 +394,26 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt):
     # 设置初始值
     opti.set_initial(X, ref_path)
     opti.set_initial(U, ref_input)
-    ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles, ego)
-    opti.set_initial(L, ref_L)
-    opti.set_initial(M, ref_M)
-    opti.set_initial(Ts,np.ones((1, N)))
+    # ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles, ego)
+    # opti.set_initial(L, ref_L)
+    # opti.set_initial(M, ref_M)
+    # opti.set_initial(L, np.ones((obs_info["vnum"], N)))
+    # opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
+    opti.set_initial(Ts, 0.05*np.ones((1, N)))
     # 设置求解器
     options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
                'ipopt.acceptable_obj_change_tol': 1e-6}
-    opti.solver('ipopt', options)
+    opti.solver('ipopt')
     sol = opti.solve()
     trajectory = sol.value(X)
     input = sol.value(U)
     dT = sol.value(Ts)
-    return trajectory, input
-
+    return trajectory, input, dT
 
 if __name__ == '__main__':
     sys.path.append(str(pathlib.Path(__file__).parent.parent))
     from HybridAStar.hybrid_a_star import *
+
     dt = 0.6
     u0 = np.array([[0], [0]])
     x0 = np.array([[-10], [9.5], [0], [0]])
@@ -455,8 +458,6 @@ if __name__ == '__main__':
                  [(1.5, 0), (1.5, 5), (15, 5)],
                  # [(-0, 10), (-0, 13), (2, 13), (2, 10), (-0, 10)],
                  ]
-
-
 
     ref_path, ref_input = GetReferenceFromHybirdAStar(path, ego, x0, dt)
     trajectory, input = planning(x0, xF, u0, ego, XYBound, obstacles, ref_path, ref_input, dt)

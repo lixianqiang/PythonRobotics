@@ -1,3 +1,4 @@
+import numpy as np
 import rclpy
 from autoware_auto_planning_msgs.msg import Trajectory, TrajectoryPoint
 from autoware_auto_perception_msgs.msg import PredictedObjects
@@ -11,6 +12,44 @@ from obca_planner.obca import *
 from obca_planner.unit import *
 from visualization_msgs.msg import Marker
 import functools
+
+def GenerateTrajectory(ref_path, ds):
+    # x = [ref_path[0, 0], ref_path[0, -1]]
+    # y = [ref_path[1, 0], ref_path[1, -1]]
+    x = ref_path[0, :].tolist()
+    y = ref_path[1, :].tolist()
+    sp = CubicSpline2D(x, y)
+    s = np.arange(0, sp.s[-1], ds)
+    rx, ry, ryaw, rvel = [], [], [], []
+    for i_s in s:
+        ix, iy = sp.calc_position(i_s)
+        rx.append(ix)
+        ry.append(iy)
+        ryaw.append(sp.calc_yaw(i_s))
+        rvel.append(ref_path[3, 0])
+    new_path = np.vstack((rx, ry, ryaw, rvel))
+    return new_path
+
+def DownSampleTrajecotry(traj, n):
+    vel_list = traj[3, :]
+    downsample_list = [], [], [], []
+    downsample_list[0].append(traj[0, 0])
+    downsample_list[1].append(traj[1, 0])
+    downsample_list[2].append(traj[2, 0])
+    downsample_list[3].append(traj[3, 0])
+    idx = 1
+    for i in range(1, len(vel_list) - 1):
+        if vel_list[i - 1] * vel_list[i] < 0:
+            idx = 0
+
+        if idx % n == 0:
+            downsample_list[0].append(traj[0, i])
+            downsample_list[1].append(traj[1, i])
+            downsample_list[2].append(traj[2, i])
+            downsample_list[3].append(traj[3, i])
+        idx += 1
+    dw_path = np.vstack((downsample_list[0], downsample_list[1], downsample_list[2], downsample_list[3]))
+    return dw_path
 
 
 def IsDiffPose(p1: Pose, p2: Pose, dist_err, ang_err):
@@ -110,15 +149,14 @@ def CalculateReferenceInput(ref_path, u0=[0.0, 0.0]):
     for i in range(1, len(x_list) - 1):
         if (vel_list[i - 1] * vel_list[i] < 0):
             orientation = -1 * orientation
-            steer_list.append(steer_list[-1])
+            steer_list.append(0)
         else:
             p1 = [x_list[i - 1], y_list[i - 1]]
             p2 = [x_list[i], y_list[i]]
             p3 = [x_list[i + 1], y_list[i + 1]]
             k = CalcCurvature(p2, p1, p3)
             steer_list.append(orientation * math.atan2(0.5 * ego["wheel_base"] * k, 1))
-    steer_list.append(0.0) # steer_list.append(steer_list[-1])
-    # acc_list = [0 for i in range(len(steer_list))]
+    steer_list.append(0.0)
     acc_list = []
     for j in range(1, len(x_list) - 1):
         if (vel_list[j - 1] * vel_list[j] < 0):
@@ -166,6 +204,8 @@ def ConvertDataFormat(node, data_type, data):
         return goal_pose
     elif data_type == "obstacle":
         obstacle_list = []
+        if len(data.objects) == 0:
+            return []
         for obj in data.objects:
             pose = obj.kinematics.initial_pose_with_covariance
             position = [pose.pose.position.x, pose.pose.position.y]
@@ -206,51 +246,74 @@ def UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index):
     return start_index, end_index, has_finish
 
 
+# def Postprocessor(traj, robot):
+#     x_list = traj[0, :].tolist()
+#     y_list = traj[1, :].tolist()
+#     yaw_list = traj[2, :].tolist()
+#     vel_list = traj[3, :].tolist()
+#     # 去除重复节点
+#     for i in range(len(x_list) - 1, 0, -1):
+#         if (x_list[i] == x_list[i - 1] and y_list[i] == y_list[i - 1]):
+#             x_list.pop(i)
+#             y_list.pop(i)
+#             yaw_list.pop(i)
+#             vel_list.pop(i)
+#
+#     sign = None
+#     p1 = [x_list[0], y_list[0]]
+#     p2 = [x_list[1], y_list[1]]
+#     if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
+#         sign = 1
+#         yaw_list[0] = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+#         vel_list[0] = sign * 1.3888
+#     else:
+#         sign = -1
+#         yaw_list[0] = math.atan2(p1[1] - p2[1], p1[0] - p2[0])
+#         vel_list[0] = sign * 1.3888
+#     idx = 0
+#     seg_idx_list = []
+#     for i in range(1, len(x_list) - 1):
+#         p1 = [x_list[i - 1], y_list[i - 1]]
+#         p2 = [x_list[i], y_list[i]]
+#         p3 = [x_list[i + 1], y_list[i + 1]]
+#
+#         if (IsShiftPoint(p2, p1, p3)):
+#             sign = -1 * sign
+#             seg_idx_list.append((idx, i))
+#             idx = i
+#
+#         if sign == 1:
+#             yaw_list[i] = math.atan2(p3[1] - p2[1], p3[0] - p2[0])
+#         else:
+#             yaw_list[i] = math.atan2(p2[1] - p3[1], p2[0] - p3[0])
+#         vel_list[i] = sign * 1.388
+#     yaw_list[-1] = yaw_list[-2]
+#     vel_list[-1] = vel_list[-2]
+#     seg_idx_list.append((idx, len(x_list) - 1))
+#
+#     new_traj = np.vstack((x_list, y_list, yaw_list, vel_list))
+#     return new_traj, seg_idx_list
+
 def Postprocessor(traj, robot):
     x_list = traj[0, :].tolist()
     y_list = traj[1, :].tolist()
     yaw_list = traj[2, :].tolist()
     vel_list = traj[3, :].tolist()
-    # 去除重复节点
-    for i in range(len(x_list) - 1, 0, -1):
-        if (x_list[i] == x_list[i - 1] and y_list[i] == y_list[i - 1]):
-            x_list.pop(i)
-            y_list.pop(i)
-            yaw_list.pop(i)
-            vel_list.pop(i)
-
-    sign = None
-    p1 = [x_list[0], y_list[0]]
-    p2 = [x_list[1], y_list[1]]
-    if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
-        sign = 1
-        yaw_list[0] = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
-        vel_list[0] = sign * 1.3888
-    else:
-        sign = -1
-        yaw_list[0] = math.atan2(p1[1] - p2[1], p1[0] - p2[0])
-        vel_list[0] = sign * 1.3888
+    x_list.pop(0)
+    y_list.pop(0)
+    yaw_list.pop(0)
+    vel_list.pop(0)
+    x_list.pop(-1)
+    y_list.pop(-1)
+    yaw_list.pop(-1)
+    vel_list.pop(-1)
     idx = 0
     seg_idx_list = []
-    for i in range(1, len(x_list) - 1):
-        p1 = [x_list[i - 1], y_list[i - 1]]
-        p2 = [x_list[i], y_list[i]]
-        p3 = [x_list[i + 1], y_list[i + 1]]
-
-        if (IsShiftPoint(p2, p1, p3)):
-            sign = -1 * sign
+    for i in range(1, len(x_list)):
+        if (vel_list[i-1] * vel_list[i] < 0):
             seg_idx_list.append((idx, i))
             idx = i
-
-        if sign == 1:
-            yaw_list[i] = math.atan2(p3[1] - p2[1], p3[0] - p2[0])
-        else:
-            yaw_list[i] = math.atan2(p2[1] - p3[1], p2[0] - p3[0])
-        vel_list[i] = sign * 1.388
-    yaw_list[-1] = yaw_list[-2]
-    vel_list[-1] = vel_list[-2]
     seg_idx_list.append((idx, len(x_list) - 1))
-
     new_traj = np.vstack((x_list, y_list, yaw_list, vel_list))
     return new_traj, seg_idx_list
 
@@ -312,6 +375,7 @@ ego = None
 traj_pub = None
 has_new_traj = False
 trajectory = None
+input = None
 seg_idx_list = []
 start_index = None
 end_index = None
@@ -330,109 +394,8 @@ raw_data = {
 ref_path = None
 ref_input = None
 
-use_txt = False
-def OnTimer(node):
-    global ego, traj_pub, raw_data, has_new_traj, trajectory, seg_idx_list, start_index, end_index, ref_path, ref_input
-    if ego is None:
-        ego = GetVehicleInfo(node)
-    if traj_pub is None:
-        traj_pub = node.create_publisher(Trajectory, '/planning/scenario_planning/parking/trajectory',
-                                         rclpy.qos.qos_profile_system_default)
-    global use_txt
-    if use_txt:
-        start_index = None
-        end_index = None
-        x0, xF, u0, ref_path, ref_input, raw_ref_path = RecoverAllData()
-        obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
-        XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat(node, "map", raw_map)
-        trajectory, input = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=0.5)
-        trajectory, seg_idx_list = Postprocessor(trajectory, x0)
-        has_new_traj = False
-    else:
-        if not IsDataReady(raw_data):
-            return
-        if has_new_traj:
-            start_index = None
-            end_index = None
-            x0 = ConvertDataFormat(node, "odometry", raw_data['odom'])
-            xF = ConvertDataFormat(node, "goal_pose", raw_data['goal'])
-            u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
-            ref_path = ConvertDataFormat(node, "trajectory", raw_data['traj'])
-
-            ref_input = CalculateReferenceInput(ref_path, u0)
-            obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
-            XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat(node, "map", raw_map)
-            trajectory, input = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=0.5)
-            trajectory, seg_idx_list = Postprocessor(trajectory, x0)
-            has_new_traj = False
-
-    if trajectory is not None and seg_idx_list != []:
-        start_index, end_index, has_finish = UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index)
-
-        all_traj = GetSegmentTrajectory(trajectory, 0, trajectory.shape[1])
-        seg_traj = GetSegmentTrajectory(trajectory, start_index, end_index)
-        ref_path1 = GetSegmentTrajectory(ref_path, 0, ref_path.shape[1])
-
-        traj_pub.publish(seg_traj)
-        plot_arrow(all_traj, "/obca_all_traj_ori")
-        plot_arrow(seg_traj, "/obca_seg_traj_ori")
-        plot_arrow(ref_path1, "/obca_ref_path_ori")
-        plot_line(all_traj, "/obca_all_traj")
-        plot_line(seg_traj, "/obca_seg_traj")
-        plot_line(ref_path1, "/obca_ref_path")
-
-        temp_yaw = []
-        temp_yaw_car = []
-        temp_yaw_ref_input2 = []
-        ref_path2 = np.zeros(ref_path.shape)
-        for i in range(1, ref_input.shape[1]):
-            ref_path2[0, i] = ref_path[0, i]
-            ref_path2[1, i] = ref_path[1, i]
-            ref_path2[2, i] = ref_input[1, i - 1] + ref_path[2, i]
-            temp_yaw.append(np.rad2deg(ref_input[1, i - 1]))
-            temp_yaw_car.append(np.rad2deg(ref_path[2, i]))
-            temp_yaw_ref_input2.append(np.rad2deg(ref_input[1, i - 1] + ref_path[2, i]))
-        ref_path21 = GetSegmentTrajectory(ref_path2, 0, ref_path2.shape[1])
-        plot_arrow(ref_path21, "/obca_ref_input_ori")
-
-
-def GetVehicleInfo(node):
-    max_vel = node.declare_parameter('vel_lim', 10.0).value  # robobus 10.0 sample 50.0
-    max_steer = node.declare_parameter('steer_lim', 1.0).value  # robobus 1.0 sample 1.0
-    max_acc = node.declare_parameter('vel_rate_lim', 3.0).value  # robobus 2.0 sample 7.0
-    max_steer_rate = node.declare_parameter('steer_rate_lim', 0.5).value  # robobus 5.0 sample 5.0
-    wheel_base = node.declare_parameter('wheel_base', 3.02).value  # robobus 3.020 sample 1.9
-    front_overhang = node.declare_parameter('front_overhang', 0.32).value  # robobus 0.400 sample 0.32
-    rear_overhang = node.declare_parameter('rear_overhang', 0.32).value  # robobus 0.400 sample 0.32
-    vehicle_length = wheel_base + front_overhang + rear_overhang
-    wheel_tread = node.declare_parameter('wheel_tread', 1.465).value  # robobus 1.618 sample 1.465
-    left_overhang = node.declare_parameter('left_overhang', 0.0).value  # robobus 0.0 sample 0.0
-    right_overhang = node.declare_parameter('right_overhang', 0.0).value  # robobus 0.0 sample 0.0
-    vehicle_width = wheel_tread + left_overhang + right_overhang
-    rear2center = vehicle_length / 2.0 - rear_overhang # rear2center = 0
-
-    vehicle_info = {
-        "max_vel": max_vel,
-        "max_steer": max_steer,
-        "max_acc": max_acc,
-        "max_steer_rate": max_steer_rate,
-        "wheel_base": wheel_base,
-        "width": vehicle_width,
-        "length": vehicle_length,
-        "rear_overhang": rear_overhang,
-        "rear2center": rear2center
-    }
-    node.get_logger().info("xxxxx wheel_base is {:.3f}".format(wheel_base))
-    node.get_logger().info("xxxxx front_overhang is {:.3f}".format(front_overhang))
-    node.get_logger().info("xxxxx rear_overhang is {:.3f}".format(rear_overhang))
-    node.get_logger().info("xxxxx wheel_tread is {:.3f}".format(wheel_tread))
-    node.get_logger().info("xxxxx left_overhang is {:.3f}".format(left_overhang))
-    node.get_logger().info("xxxxx right_overhang is {:.3f}".format(right_overhang))
-    return vehicle_info
-
-record = False
 def OnTimer4Record(node):
-    global record
+    global record, dirname
     if record:  # 在debug程序的时候手动设置为True,然后当程序退出后会生成对应文件
         def RecordAllData(node, raw_data):
             def write_array_to_text(array, file_path):
@@ -453,15 +416,119 @@ def OnTimer4Record(node):
                 raw_ref_path[4, i] = raw_data['traj'].points[i].pose.orientation.z
                 raw_ref_path[5, i] = raw_data['traj'].points[i].pose.orientation.w
                 raw_ref_path[6, i] = raw_data['traj'].points[i].longitudinal_velocity_mps
-            write_array_to_text(x0, "x0.txt")
-            write_array_to_text(xF, "xF.txt")
-            write_array_to_text(u0, "u0.txt")
-            write_array_to_text(ref_path, "ref_path.txt")
-            write_array_to_text(ref_input, "ref_input.txt")
-            write_array_to_text(raw_ref_path, "raw_ref_path.txt")
+            write_array_to_text(x0, dirname+"x0.txt")
+            write_array_to_text(xF, dirname+"xF.txt")
+            write_array_to_text(u0, dirname+"u0.txt")
+            write_array_to_text(ref_path, dirname+"ref_path.txt")
+            write_array_to_text(ref_input, dirname+"ref_input.txt")
+            write_array_to_text(raw_ref_path, dirname+"raw_ref_path.txt")
         global raw_data, ego
         RecordAllData(node, raw_data)
         record = False
+
+use_txt = False
+dirname = '../log3/'
+record = False
+
+def OnTimer(node):
+    global ego, traj_pub, raw_data, has_new_traj, trajectory, input, seg_idx_list, start_index, end_index, ref_path, ref_input
+    if ego is None:
+        ego = GetVehicleInfo(node)
+    if traj_pub is None:
+        traj_pub = node.create_publisher(Trajectory, '/planning/scenario_planning/parking/trajectory',
+                                         rclpy.qos.qos_profile_system_default)
+    global use_txt
+    if use_txt:
+        start_index = None
+        end_index = None
+        start_index = None
+        end_index = None
+        global dirname
+        x0, xF, u0, ref_path, ref_input, raw_ref_path = RecoverAllData(dirname)
+        ref_input = CalculateReferenceInput(ref_path)
+        obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
+        XYbounds = [-np.inf, np.inf, -np.inf, np.inf]
+    else:
+        if not IsDataReady(raw_data):
+            return
+        if has_new_traj:
+            start_index = None
+            end_index = None
+            x0 = ConvertDataFormat(node, "odometry", raw_data['odom'])
+            xF = ConvertDataFormat(node, "goal_pose", raw_data['goal'])
+            u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
+            ref_path = ConvertDataFormat(node, "trajectory", raw_data['traj'])
+            ref_input = CalculateReferenceInput(ref_path)
+            obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
+            XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat(node, "map", raw_map)
+    trajectory, input, dT = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, .01)
+    trajectory, seg_idx_list = Postprocessor(trajectory, x0)
+
+    if trajectory is not None and seg_idx_list != []:
+        start_index, end_index, has_finish = UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index)
+
+        all_traj = GetSegmentTrajectory(trajectory, 0, trajectory.shape[1])
+        seg_traj = GetSegmentTrajectory(trajectory, start_index, end_index)
+        ref_path1 = GetSegmentTrajectory(ref_path, 0, ref_path.shape[1])
+
+        traj_pub.publish(seg_traj)
+        plot_arrow(all_traj, "/obca_all_traj_ori")
+        plot_arrow(seg_traj, "/obca_seg_traj_ori")
+        plot_arrow(ref_path1, "/obca_ref_path_ori")
+        plot_line(all_traj, "/obca_all_traj")
+        plot_line(seg_traj, "/obca_seg_traj")
+        plot_line(ref_path1, "/obca_ref_path", [0.0, 1.0, 0.0])
+
+        temp_yaw = []
+        temp_yaw_car = []
+        temp_yaw_ref_input2 = []
+        ref_path2 = np.zeros(ref_path.shape)
+        for i in range(1, ref_input.shape[1]):
+            ref_path2[0, i] = ref_path[0, i]
+            ref_path2[1, i] = ref_path[1, i]
+            ref_path2[2, i] = ref_input[1, i - 1] + ref_path[2, i]
+            temp_yaw.append(np.rad2deg(ref_input[1, i - 1]))
+            temp_yaw_car.append(np.rad2deg(ref_path[2, i]))
+            temp_yaw_ref_input2.append(np.rad2deg(ref_input[1, i - 1] + ref_path[2, i]))
+        ref_path21 = GetSegmentTrajectory(ref_path2, 0, ref_path2.shape[1])
+        plot_arrow(ref_path21, "/obca_ref_input_ori")
+
+
+def GetVehicleInfo(node):
+    max_vel = node.declare_parameter('vel_lim', 50.0).value  # robobus 10.0 sample 50.0
+    min_vel = 0.25 # motion_velocity_smoother 起步速度至少0.25
+    max_steer = node.declare_parameter('steer_lim', 0.7).value  # robobus 1.0 sample 1.0
+    max_acc = node.declare_parameter('vel_rate_lim', 10.).value  # robobus 2.0 sample 0.1
+    max_steer_rate = node.declare_parameter('steer_rate_lim', 0.7).value  # robobus 5.0 sample 5.0, mpc 0.7
+    wheel_base = node.declare_parameter('wheel_base', 2.79).value  # robobus 3.020 sample 2.79
+    front_overhang = node.declare_parameter('front_overhang', 1.0).value  # robobus 0.400 sample 1.0
+    rear_overhang = node.declare_parameter('rear_overhang', 1.1).value  # robobus 0.400 sample 1.1
+    vehicle_length = wheel_base + front_overhang + rear_overhang
+    wheel_tread = node.declare_parameter('wheel_tread', 1.64).value  # robobus 1.618 sample 1.64
+    left_overhang = node.declare_parameter('left_overhang', 0.128).value  # robobus 0.0 sample 0.128
+    right_overhang = node.declare_parameter('right_overhang', 0.128).value  # robobus 0.0 sample 0.128
+    vehicle_width = wheel_tread + left_overhang + right_overhang
+    rear2center = vehicle_length / 2.0 - rear_overhang # rear2center = 0
+
+    vehicle_info = {
+        "max_vel": max_vel,
+        'min_vel': min_vel,
+        "max_steer": max_steer,
+        "max_acc": max_acc,
+        "max_steer_rate": max_steer_rate,
+        "wheel_base": wheel_base,
+        "width": vehicle_width,
+        "length": vehicle_length,
+        "rear_overhang": rear_overhang,
+        "rear2center": rear2center
+    }
+    node.get_logger().info("xxxxx wheel_base is {:.3f}".format(wheel_base))
+    node.get_logger().info("xxxxx front_overhang is {:.3f}".format(front_overhang))
+    node.get_logger().info("xxxxx rear_overhang is {:.3f}".format(rear_overhang))
+    node.get_logger().info("xxxxx wheel_tread is {:.3f}".format(wheel_tread))
+    node.get_logger().info("xxxxx left_overhang is {:.3f}".format(left_overhang))
+    node.get_logger().info("xxxxx right_overhang is {:.3f}".format(right_overhang))
+    return vehicle_info
 
 pub_init = False
 pub_goal = False
@@ -555,6 +622,14 @@ if __name__ == '__main__':
     node.destroy_node()
     rclpy.shutdown()
 
-
-if __name__ == '__main__':
-    main()
+    # # 验证unity的函数
+    # # target_yaw = (-135-135-45-90)/180*np.pi
+    # # quat = ConvertYawToQuaternion(target_yaw)
+    # # yaw_rad = ConvertQuaternionToYaw(quat)
+    # # quat1 = ConvertYawToQuaternion(yaw_rad)
+    # # if math.fabs(yaw_rad - target_yaw) < 1e-6:
+    # #     print("right, right, right")
+    # # else:
+    # #     print("wrong, wrong, wrong")
+    # #
+    # # res = AngleDiff(target_yaw, yaw_rad)

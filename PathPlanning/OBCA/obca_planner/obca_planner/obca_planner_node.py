@@ -1,55 +1,15 @@
-import numpy as np
 import rclpy
 from autoware_auto_planning_msgs.msg import Trajectory, TrajectoryPoint
 from autoware_auto_perception_msgs.msg import PredictedObjects
 from autoware_auto_vehicle_msgs.msg import SteeringReport
 from autoware_auto_mapping_msgs.msg import HADMapBin
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped, Pose, PoseArray, Point
-from geometry_msgs.msg import AccelWithCovarianceStamped
+from geometry_msgs.msg import PoseStamped, Pose, PoseArray, Point, AccelWithCovarianceStamped
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, QoSDurabilityPolicy
 from obca_planner.obca import *
 from obca_planner.unit import *
 from visualization_msgs.msg import Marker
 import functools
-
-def GenerateTrajectory(ref_path, ds):
-    # x = [ref_path[0, 0], ref_path[0, -1]]
-    # y = [ref_path[1, 0], ref_path[1, -1]]
-    x = ref_path[0, :].tolist()
-    y = ref_path[1, :].tolist()
-    sp = CubicSpline2D(x, y)
-    s = np.arange(0, sp.s[-1], ds)
-    rx, ry, ryaw, rvel = [], [], [], []
-    for i_s in s:
-        ix, iy = sp.calc_position(i_s)
-        rx.append(ix)
-        ry.append(iy)
-        ryaw.append(sp.calc_yaw(i_s))
-        rvel.append(ref_path[3, 0])
-    new_path = np.vstack((rx, ry, ryaw, rvel))
-    return new_path
-
-def DownSampleTrajecotry(traj, n):
-    vel_list = traj[3, :]
-    downsample_list = [], [], [], []
-    downsample_list[0].append(traj[0, 0])
-    downsample_list[1].append(traj[1, 0])
-    downsample_list[2].append(traj[2, 0])
-    downsample_list[3].append(traj[3, 0])
-    idx = 1
-    for i in range(1, len(vel_list) - 1):
-        if vel_list[i - 1] * vel_list[i] < 0:
-            idx = 0
-
-        if idx % n == 0:
-            downsample_list[0].append(traj[0, i])
-            downsample_list[1].append(traj[1, i])
-            downsample_list[2].append(traj[2, i])
-            downsample_list[3].append(traj[3, i])
-        idx += 1
-    dw_path = np.vstack((downsample_list[0], downsample_list[1], downsample_list[2], downsample_list[3]))
-    return dw_path
 
 
 def IsDiffPose(p1: Pose, p2: Pose, dist_err, ang_err):
@@ -64,42 +24,20 @@ def IsDiffPose(p1: Pose, p2: Pose, dist_err, ang_err):
     return False
 
 
-def IsDiffTraj(traj1: Trajectory, traj2: Trajectory):
-    if len(traj1.points) != len(traj2.points):
-        return True
-    for p1, p2 in zip(traj1.points, traj2.points):
-        if IsDiffPose(p1.pose, p2.pose, 0.25, np.pi / 18):
-            return True
-    return False
-
-
 def OnMapCallBack(msg):
     global raw_data
     raw_data['map'] = msg
 
 
-error_val = None
-
-
 def OnTrajecotryCallBack(msg: Trajectory):
-    global raw_data, has_new_traj, has_new_goal, error_val
+    global raw_data, has_new_traj
     if len(msg.points) <= 1 or raw_data['goal'] is None: return
-    if raw_data['traj'] is None:
-        raw_data['traj'] = msg
+    if has_new_traj: raw_data['traj'] = msg
+    if raw_data['traj'] is None or len(raw_data['traj'].points) != len(msg.points) or IsDiffPose(
+            raw_data['traj'].points[-1].pose,
+            msg.points[-1].pose, 1e-3, 1e-3):
         has_new_traj = True
         return
-    elif len(raw_data['traj'].points) != len(msg.points) or IsDiffPose(raw_data['traj'].points[-1].pose,
-                                                                       msg.points[-1].pose, 1e-2, 1e-2):
-        has_new_traj = True
-        raw_data['traj'] = msg
-        return
-    if has_new_traj:
-        p1 = raw_data['goal'].pose.position.x, raw_data['goal'].pose.position.y
-        p2 = raw_data['traj'].points[-1].pose.position.x, raw_data['traj'].points[-1].pose.position.y
-        if error_val is None:
-            error_val = CalcDistance(p1, p2)
-        elif math.fabs(CalcDistance(p1, p2) - error_val) > 1e-3:
-            error_val = CalcDistance(p1, p2)
 
 
 def HasStop(odom_buffer):
@@ -123,8 +61,7 @@ def OnOdometryCallBack(msg):
 
 def OnGoalCallBack(msg):
     global raw_data
-    if raw_data['goal'] is None or IsDiffPose(raw_data['goal'].pose, msg.pose, 1e-3, 1e-3):
-        raw_data['goal'] = msg
+    raw_data['goal'] = msg
 
 
 def OnObstacleCallBack(msg):
@@ -142,82 +79,52 @@ def OnSteeringCallBack(msg):
     raw_data['steer'] = msg
 
 
-def CalculateReferenceInput(ref_path, u0=[0.0, 0.0]):
-    steer_list = []
-    x_list, y_list, vel_list = ref_path[0], ref_path[1], ref_path[3]
-    orientation = np.sign(vel_list[0])
-    for i in range(1, len(x_list) - 1):
-        if (vel_list[i - 1] * vel_list[i] < 0):
-            orientation = -1 * orientation
-            steer_list.append(0)
-        else:
-            p1 = [x_list[i - 1], y_list[i - 1]]
-            p2 = [x_list[i], y_list[i]]
-            p3 = [x_list[i + 1], y_list[i + 1]]
-            k = CalcCurvature(p2, p1, p3)
-            steer_list.append(orientation * math.atan2(0.5 * ego["wheel_base"] * k, 1))
-    steer_list.append(0.0)
-    acc_list = []
-    for j in range(1, len(x_list) - 1):
-        if (vel_list[j - 1] * vel_list[j] < 0):
-            acc_list.append(0)
-        else:
-           acc_list.append(vel_list[j] - vel_list[j - 1])
-    acc_list.append(0)
-    ref_input = np.vstack((acc_list, steer_list))
-    return ref_input
+def ConvertDataFormat(raw_data):
+    robot = raw_data['odom'].pose
+    quat = [robot.pose.orientation.x, robot.pose.orientation.y, robot.pose.orientation.z, robot.pose.orientation.w]
+    x0 = np.zeros((4, 1))
+    x0[0, 0] = robot.pose.position.x
+    x0[1, 0] = robot.pose.position.y
+    x0[2, 0] = ConvertQuaternionToYaw(quat)
+    x0[3, 0] = raw_data['odom'].twist.twist.linear.x
 
+    goal = raw_data['goal'].pose
+    quat = [goal.orientation.x, goal.orientation.y, goal.orientation.z, goal.orientation.w]
+    xF = np.zeros((4, 1))
+    xF[0, 0] = goal.position.x
+    xF[1, 0] = goal.position.y
+    xF[2, 0] = ConvertQuaternionToYaw(quat)
+    xF[3, 0] = 0
 
-def ConvertDataFormat(node, data_type, data):
-    if data_type == "trajectory":
-        N = len(data.points)
-        traj = np.zeros((4, N))
-        for i in range(N):
-            traj_point = data.points[i].pose
-            quaternion = [traj_point.orientation.x, traj_point.orientation.y, traj_point.orientation.z,
-                          traj_point.orientation.w]
-            traj[0, i] = traj_point.position.x
-            traj[1, i] = traj_point.position.y
-            traj[2, i] = ConvertQuaternionToYaw(quaternion)
-            traj[3, i] = data.points[i].longitudinal_velocity_mps
-        return traj
-    elif data_type == "odometry":
-        odom = np.zeros((4, 1))
-        pose = data.pose.pose
-        position = [pose.position.x, pose.position.y]
-        quaternion = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
-        odom[0, 0] = position[0]
-        odom[1, 0] = position[1]
-        odom[2, 0] = ConvertQuaternionToYaw(quaternion)
-        odom[3, 0] = data.twist.twist.linear.x
-        return odom
-    elif data_type == "goal_pose":
-        goal_pose = np.zeros((4, 1))
-        pose = data.pose
-        position = [pose.position.x, pose.position.y]
-        quaternion = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+    u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
 
-        goal_pose[0, 0] = position[0]
-        goal_pose[1, 0] = position[1]
-        goal_pose[2, 0] = ConvertQuaternionToYaw(quaternion)
-        goal_pose[3, 0] = 0
-        return goal_pose
-    elif data_type == "obstacle":
-        obstacle_list = []
-        if len(data.objects) == 0:
-            return []
-        for obj in data.objects:
-            pose = obj.kinematics.initial_pose_with_covariance
-            position = [pose.pose.position.x, pose.pose.position.y]
-            quaternion = [pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z,
-                          pose.pose.orientation.w]
-            center_pose = [position[0], position[1], ConvertQuaternionToYaw(quaternion)]
-            contour_shape = [obj.shape.dimensions.x, obj.shape.dimensions.y]
-            obstacle = ExtractRectangularContourPoints(center_pose, contour_shape)
-            obstacle_list.append(obstacle)
-        return obstacle_list
-    elif data_type == "map":
+    N = len(raw_data['traj'].points)
+    ref_traj = np.zeros((4, N))
+    for i in range(N):
+        traj_pnt = raw_data['traj'].points[i]
+        quat = [traj_pnt.pose.orientation.x, traj_pnt.pose.orientation.y, traj_pnt.pose.orientation.z,
+                traj_pnt.pose.orientation.w]
+        ref_traj[0, i] = traj_pnt.pose.position.x
+        ref_traj[1, i] = traj_pnt.pose.position.y
+        ref_traj[2, i] = ConvertQuaternionToYaw(quat)
+        ref_traj[3, i] = traj_pnt.longitudinal_velocity_mps
+
+    obstacles = []
+    if raw_data['obs'] is not None:
+        for obj in raw_data['obs'].objects:
+            pose = obj.kinematics.initial_pose_with_covariance.pose
+            posi = [pose.pose.position.x, pose.pose.position.y]
+            quat = [pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z,
+                    pose.pose.orientation.w]
+            centroid = [posi[0], posi[1], ConvertQuaternionToYaw(quat)]
+            shape = [obj.shape.dimensions.x, obj.shape.dimensions.y]
+            obs = ExtractRectangularContourPoints(centroid, shape)
+            obstacles.append(obs)
+
+    XYbounds = [-np.inf, np.inf, -np.inf, np.inf]
+    if raw_data['map'] is not None:
         pass
+    return x0, xF, u0, ref_traj, obstacles, XYbounds
 
 
 def IsDataReady(raw_data):
@@ -226,96 +133,28 @@ def IsDataReady(raw_data):
     return True
 
 
-def UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index):
-    global raw_data, odom_buffer, sidx
-    has_finish = False
-    if start_index is None or end_index is None:
-        start_index = seg_idx_list[0][0]
-        end_index = seg_idx_list[0][1]
-        sidx = 0
-    p1 = [raw_data['odom'].pose.pose.position.x, raw_data['odom'].pose.pose.position.y]
-    p2 = [trajectory[0, end_index], trajectory[1, end_index]]
-    if CalcDistance(p1, p2) < 1.0 and HasStop(odom_buffer):
-        sidx += 1
-        if sidx <= len(seg_idx_list) - 1:
-            start_index = seg_idx_list[sidx][0]
-            end_index = seg_idx_list[sidx][1]
-            has_finish = False
-        else:
-            has_finish = True
-    return start_index, end_index, has_finish
-
-
-# def Postprocessor(traj, robot):
-#     x_list = traj[0, :].tolist()
-#     y_list = traj[1, :].tolist()
-#     yaw_list = traj[2, :].tolist()
-#     vel_list = traj[3, :].tolist()
-#     # 去除重复节点
-#     for i in range(len(x_list) - 1, 0, -1):
-#         if (x_list[i] == x_list[i - 1] and y_list[i] == y_list[i - 1]):
-#             x_list.pop(i)
-#             y_list.pop(i)
-#             yaw_list.pop(i)
-#             vel_list.pop(i)
-#
-#     sign = None
-#     p1 = [x_list[0], y_list[0]]
-#     p2 = [x_list[1], y_list[1]]
-#     if (math.fabs(AngleDiff(math.atan2((y_list[1] - y_list[0]), (x_list[1] - x_list[0])), robot[2])) < np.pi / 2):
-#         sign = 1
-#         yaw_list[0] = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
-#         vel_list[0] = sign * 1.3888
-#     else:
-#         sign = -1
-#         yaw_list[0] = math.atan2(p1[1] - p2[1], p1[0] - p2[0])
-#         vel_list[0] = sign * 1.3888
-#     idx = 0
-#     seg_idx_list = []
-#     for i in range(1, len(x_list) - 1):
-#         p1 = [x_list[i - 1], y_list[i - 1]]
-#         p2 = [x_list[i], y_list[i]]
-#         p3 = [x_list[i + 1], y_list[i + 1]]
-#
-#         if (IsShiftPoint(p2, p1, p3)):
-#             sign = -1 * sign
-#             seg_idx_list.append((idx, i))
-#             idx = i
-#
-#         if sign == 1:
-#             yaw_list[i] = math.atan2(p3[1] - p2[1], p3[0] - p2[0])
-#         else:
-#             yaw_list[i] = math.atan2(p2[1] - p3[1], p2[0] - p3[0])
-#         vel_list[i] = sign * 1.388
-#     yaw_list[-1] = yaw_list[-2]
-#     vel_list[-1] = vel_list[-2]
-#     seg_idx_list.append((idx, len(x_list) - 1))
-#
-#     new_traj = np.vstack((x_list, y_list, yaw_list, vel_list))
-#     return new_traj, seg_idx_list
-
-def Postprocessor(traj, robot):
-    x_list = traj[0, :].tolist()
-    y_list = traj[1, :].tolist()
-    yaw_list = traj[2, :].tolist()
-    vel_list = traj[3, :].tolist()
-    x_list.pop(0)
-    y_list.pop(0)
-    yaw_list.pop(0)
-    vel_list.pop(0)
-    x_list.pop(-1)
-    y_list.pop(-1)
-    yaw_list.pop(-1)
-    vel_list.pop(-1)
+def GetIndexInterval(traj):
     idx = 0
-    seg_idx_list = []
-    for i in range(1, len(x_list)):
-        if (vel_list[i-1] * vel_list[i] < 0):
-            seg_idx_list.append((idx, i))
+    index_interval = []
+    vel_list = traj[3, :]
+    orientation = np.sign(vel_list[1])
+    for i in range(1, len(vel_list) - 1):
+        if (vel_list[i - 1] * vel_list[i] < 0):
+            orientation = -1 * orientation
+            index_interval.append((idx, i))
             idx = i
-    seg_idx_list.append((idx, len(x_list) - 1))
-    new_traj = np.vstack((x_list, y_list, yaw_list, vel_list))
-    return new_traj, seg_idx_list
+    index_interval.append((idx, len(vel_list) - 1))
+    return index_interval
+
+def UpdateTargetIndex(traj, seg_idx_list):
+    start_index, end_index = seg_idx_list[0]
+    if HasStop(odom_buffer):
+        p1 = [raw_data['odom'].pose.pose.position.x, raw_data['odom'].pose.pose.position.y]
+        p2 = [traj[0, end_index], traj[1, end_index]]
+        if CalcDistance(p1, p2) < 1.0:
+            seg_idx_list.pop(0)
+    has_finish = True if seg_idx_list == [] else False
+    return start_index, end_index, has_finish
 
 
 def plot_arrow(traj, topic):
@@ -375,12 +214,8 @@ ego = None
 traj_pub = None
 has_new_traj = False
 trajectory = None
-input = None
 seg_idx_list = []
-start_index = None
-end_index = None
 odom_buffer = []
-sidx = None
 raw_data = {
     "traj": None,
     "odom": None,
@@ -391,112 +226,56 @@ raw_data = {
     "map": None
 }
 
-ref_path = None
-ref_input = None
-
-def OnTimer4Record(node):
-    global record, dirname
-    if record:  # 在debug程序的时候手动设置为True,然后当程序退出后会生成对应文件
-        def RecordAllData(node, raw_data):
-            def write_array_to_text(array, file_path):
-                with open(file_path, 'w') as file:
-                    np.savetxt(file, array, delimiter=',')
-
-            x0 = ConvertDataFormat(node, "odometry", raw_data['odom'])
-            xF = ConvertDataFormat(node, "goal_pose", raw_data['goal'])
-            u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
-            ref_path = ConvertDataFormat(node, "trajectory", raw_data['traj'])
-            ref_input = CalculateReferenceInput(ref_path)
-            raw_ref_path = np.zeros((7, len(raw_data['traj'].points)))
-            for i in range(len(raw_data['traj'].points)):
-                raw_ref_path[0, i] = raw_data['traj'].points[i].pose.position.x
-                raw_ref_path[1, i] = raw_data['traj'].points[i].pose.position.y
-                raw_ref_path[2, i] = raw_data['traj'].points[i].pose.orientation.x
-                raw_ref_path[3, i] = raw_data['traj'].points[i].pose.orientation.y
-                raw_ref_path[4, i] = raw_data['traj'].points[i].pose.orientation.z
-                raw_ref_path[5, i] = raw_data['traj'].points[i].pose.orientation.w
-                raw_ref_path[6, i] = raw_data['traj'].points[i].longitudinal_velocity_mps
-            write_array_to_text(x0, dirname+"x0.txt")
-            write_array_to_text(xF, dirname+"xF.txt")
-            write_array_to_text(u0, dirname+"u0.txt")
-            write_array_to_text(ref_path, dirname+"ref_path.txt")
-            write_array_to_text(ref_input, dirname+"ref_input.txt")
-            write_array_to_text(raw_ref_path, dirname+"raw_ref_path.txt")
-        global raw_data, ego
-        RecordAllData(node, raw_data)
-        record = False
-
-use_txt = False
-dirname = '../log3/'
-record = False
 
 def OnTimer(node):
-    global ego, traj_pub, raw_data, has_new_traj, trajectory, input, seg_idx_list, start_index, end_index, ref_path, ref_input
+    global ego, traj_pub, raw_data, has_new_traj, trajectory, seg_idx_list, ref_traj, ref_input
     if ego is None:
         ego = GetVehicleInfo(node)
     if traj_pub is None:
         traj_pub = node.create_publisher(Trajectory, '/planning/scenario_planning/parking/trajectory',
                                          rclpy.qos.qos_profile_system_default)
-    global use_txt
-    if use_txt:
-        start_index = None
-        end_index = None
-        start_index = None
-        end_index = None
-        global dirname
-        x0, xF, u0, ref_path, ref_input, raw_ref_path = RecoverAllData(dirname)
-        ref_input = CalculateReferenceInput(ref_path)
-        obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
-        XYbounds = [-np.inf, np.inf, -np.inf, np.inf]
-    else:
-        if not IsDataReady(raw_data):
-            return
-        if has_new_traj:
-            start_index = None
-            end_index = None
-            x0 = ConvertDataFormat(node, "odometry", raw_data['odom'])
-            xF = ConvertDataFormat(node, "goal_pose", raw_data['goal'])
-            u0 = np.array([[raw_data['acc'].accel.accel.linear.x], [raw_data['steer'].steering_tire_angle]])
-            ref_path = ConvertDataFormat(node, "trajectory", raw_data['traj'])
-            ref_input = CalculateReferenceInput(ref_path)
-            obstacles = ConvertDataFormat(node, "obstacle", raw_data['obs'])
-            XYbounds = [-np.inf, np.inf, -np.inf, np.inf]  # map = ConvertDataFormat(node, "map", raw_map)
-    trajectory, input, dT = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, .01)
-    trajectory, seg_idx_list = Postprocessor(trajectory, x0)
+    if not IsDataReady(raw_data):
+        return
+    if has_new_traj:
+        x0, xF, u0, ref_traj, obstacles, XYbounds = ConvertDataFormat(raw_data)
+        ref_input = CalculateReferenceInput(ref_traj, ego)
+        trajectory, _, _ = planning(x0, xF, u0, ego, XYbounds, obstacles, ref_traj, ref_input, 0.02)
+        seg_idx_list = GetIndexInterval(trajectory)
+        has_new_traj = False
+    if trajectory is not None and len(seg_idx_list) != 0:
+        start_index, end_index, has_finish = UpdateTargetIndex(trajectory, seg_idx_list)
+        if not has_finish:
+            seg_traj = GetSegmentTrajectory(trajectory, start_index, end_index)
+            traj_pub.publish(seg_traj)
 
-    if trajectory is not None and seg_idx_list != []:
-        start_index, end_index, has_finish = UpdateTargetIndex(trajectory, seg_idx_list, start_index, end_index)
-
+        # debug
         all_traj = GetSegmentTrajectory(trajectory, 0, trajectory.shape[1])
-        seg_traj = GetSegmentTrajectory(trajectory, start_index, end_index)
-        ref_path1 = GetSegmentTrajectory(ref_path, 0, ref_path.shape[1])
-
-        traj_pub.publish(seg_traj)
+        ref_traj1 = GetSegmentTrajectory(ref_traj, 0, ref_traj.shape[1])
         plot_arrow(all_traj, "/obca_all_traj_ori")
         plot_arrow(seg_traj, "/obca_seg_traj_ori")
-        plot_arrow(ref_path1, "/obca_ref_path_ori")
+        plot_arrow(ref_traj1, "/obca_ref_traj_ori")
         plot_line(all_traj, "/obca_all_traj")
         plot_line(seg_traj, "/obca_seg_traj")
-        plot_line(ref_path1, "/obca_ref_path", [0.0, 1.0, 0.0])
+        plot_line(ref_traj1, "/obca_ref_traj", [0.0, 1.0, 0.0])
 
         temp_yaw = []
         temp_yaw_car = []
         temp_yaw_ref_input2 = []
-        ref_path2 = np.zeros(ref_path.shape)
+        ref_traj2 = np.zeros(ref_traj.shape)
         for i in range(1, ref_input.shape[1]):
-            ref_path2[0, i] = ref_path[0, i]
-            ref_path2[1, i] = ref_path[1, i]
-            ref_path2[2, i] = ref_input[1, i - 1] + ref_path[2, i]
+            ref_traj2[0, i] = ref_traj[0, i]
+            ref_traj2[1, i] = ref_traj[1, i]
+            ref_traj2[2, i] = ref_input[1, i - 1] + ref_traj[2, i]
             temp_yaw.append(np.rad2deg(ref_input[1, i - 1]))
-            temp_yaw_car.append(np.rad2deg(ref_path[2, i]))
-            temp_yaw_ref_input2.append(np.rad2deg(ref_input[1, i - 1] + ref_path[2, i]))
-        ref_path21 = GetSegmentTrajectory(ref_path2, 0, ref_path2.shape[1])
-        plot_arrow(ref_path21, "/obca_ref_input_ori")
+            temp_yaw_car.append(np.rad2deg(ref_traj[2, i]))
+            temp_yaw_ref_input2.append(np.rad2deg(ref_input[1, i - 1] + ref_traj[2, i]))
+        ref_traj21 = GetSegmentTrajectory(ref_traj2, 0, ref_traj2.shape[1])
+        plot_arrow(ref_traj21, "/obca_ref_input_ori")
 
 
 def GetVehicleInfo(node):
     max_vel = node.declare_parameter('vel_lim', 50.0).value  # robobus 10.0 sample 50.0
-    min_vel = 0.25 # motion_velocity_smoother 起步速度至少0.25
+    min_vel = 0.25  # motion_velocity_smoother 起步速度至少0.25
     max_steer = node.declare_parameter('steer_lim', 0.7).value  # robobus 1.0 sample 1.0
     max_acc = node.declare_parameter('vel_rate_lim', 10.).value  # robobus 2.0 sample 0.1
     max_steer_rate = node.declare_parameter('steer_rate_lim', 0.7).value  # robobus 5.0 sample 5.0, mpc 0.7
@@ -508,7 +287,7 @@ def GetVehicleInfo(node):
     left_overhang = node.declare_parameter('left_overhang', 0.128).value  # robobus 0.0 sample 0.128
     right_overhang = node.declare_parameter('right_overhang', 0.128).value  # robobus 0.0 sample 0.128
     vehicle_width = wheel_tread + left_overhang + right_overhang
-    rear2center = vehicle_length / 2.0 - rear_overhang # rear2center = 0
+    rear2center = vehicle_length / 2.0 - rear_overhang  # rear2center = 0
 
     vehicle_info = {
         "max_vel": max_vel,
@@ -530,47 +309,6 @@ def GetVehicleInfo(node):
     node.get_logger().info("xxxxx right_overhang is {:.3f}".format(right_overhang))
     return vehicle_info
 
-pub_init = False
-pub_goal = False
-def OnTimer4Init_Goal(node):
-    global pub_init
-    if pub_init:
-        from geometry_msgs.msg import PoseWithCovarianceStamped
-        init_pose_pub = node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 1)
-        init_pose = PoseWithCovarianceStamped()
-        p = Pose()
-        p.position.x = 3.243661880493164062e+01
-        p.position.y = -5.368216514587402344e+00
-        target_yaw = -3.132069106700981376e+00
-        quat = ConvertYawToQuaternion(target_yaw)
-        p.orientation.x = quat[0]
-        p.orientation.y = quat[1]
-        p.orientation.z = quat[2]
-        p.orientation.w = quat[3]
-
-        init_pose.pose.pose = p
-        init_pose.header.frame_id = "map"
-        init_pose.header.stamp = node.get_clock().now().to_msg()
-        init_pose_pub.publish(init_pose)
-        pub_init = False
-    global pub_goal
-    if pub_goal:
-        goal_pose_pub = node.create_publisher(PoseStamped, '/planning/mission_planning/goal', 1)
-        goal_pose = PoseStamped()
-        p = Pose()
-        p.position.x = 4.497026062011718750e+01
-        p.position.y = -7.964234828948974609e+00
-        target_yaw = 1.792877627312906119e+00
-        quat = ConvertYawToQuaternion(target_yaw)
-        p.orientation.x = quat[0]
-        p.orientation.y = quat[1]
-        p.orientation.z = quat[2]
-        p.orientation.w = quat[3]
-        goal_pose.pose = p
-        goal_pose.header.frame_id = "map"
-        goal_pose.header.stamp = node.get_clock().now().to_msg()
-        goal_pose_pub.publish(goal_pose)
-        pub_goal = False
 
 if __name__ == '__main__':
     rclpy.init()
@@ -615,21 +353,7 @@ if __name__ == '__main__':
                                        10)
     steer_sub = node.create_subscription(SteeringReport, '/vehicle/status/steering_status',
                                          OnSteeringCallBack, 10)
-    timer4record = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer4Record, node))
-    timer4init_goal = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer4Init_Goal, node))
     timer = node.create_timer(timer_period_sec=0.1, callback=functools.partial(OnTimer, node))
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
-
-    # # 验证unity的函数
-    # # target_yaw = (-135-135-45-90)/180*np.pi
-    # # quat = ConvertYawToQuaternion(target_yaw)
-    # # yaw_rad = ConvertQuaternionToYaw(quat)
-    # # quat1 = ConvertYawToQuaternion(yaw_rad)
-    # # if math.fabs(yaw_rad - target_yaw) < 1e-6:
-    # #     print("right, right, right")
-    # # else:
-    # #     print("wrong, wrong, wrong")
-    # #
-    # # res = AngleDiff(target_yaw, yaw_rad)

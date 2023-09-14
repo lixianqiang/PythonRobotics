@@ -153,18 +153,44 @@ def GetReferenceFromHybirdAStar(path, ego, x0, dt):
     acc_list.append(0)
     steer_list.append(steer_list[-1])
 
-    ref_path = np.zeros((4, len(x_list)))
+    ref_traj = np.zeros((4, len(x_list)))
     for i in range(len(x_list)):
-        ref_path[0, i] = x_list[i]
-        ref_path[1, i] = y_list[i]
-        ref_path[2, i] = yaw_list[i]
-        ref_path[3, i] = vel_list[i]
+        ref_traj[0, i] = x_list[i]
+        ref_traj[1, i] = y_list[i]
+        ref_traj[2, i] = yaw_list[i]
+        ref_traj[3, i] = vel_list[i]
 
     ref_input = np.zeros((2, len(acc_list)))
     for i in range(len(acc_list)):
         ref_input[0, i] = acc_list[i]
         ref_input[1, i] = steer_list[i]
-    return ref_path, ref_input
+    return ref_traj, ref_input
+
+
+def CalculateReferenceInput(ref_traj, ego):
+    steer_list = []
+    x_list, y_list, vel_list = ref_traj[0], ref_traj[1], ref_traj[3]
+    orientation = np.sign(vel_list[1])
+    for i in range(1, len(vel_list) - 1):
+        if (vel_list[i - 1] * vel_list[i] < 0):
+            orientation = -1 * orientation
+            steer_list.append(0)
+        else:
+            p1 = [x_list[i - 1], y_list[i - 1]]
+            p2 = [x_list[i], y_list[i]]
+            p3 = [x_list[i + 1], y_list[i + 1]]
+            k = CalcCurvature(p2, p1, p3)
+            steer_list.append(orientation * math.atan2(ego["wheel_base"] * k, 1))
+    steer_list.append(0.0)
+    acc_list = []
+    for j in range(1, len(x_list) - 1):
+        if (vel_list[j - 1] * vel_list[j] < 0):
+            acc_list.append(0)
+        else:
+            acc_list.append(vel_list[j] - vel_list[j - 1])
+    acc_list.append(0)
+    ref_input = np.vstack((acc_list, steer_list))
+    return ref_input
 
 
 def GetObstacleInfo(obstacle_list):
@@ -210,7 +236,6 @@ def GetObstacleInfo(obstacle_list):
 #         b[i] = -v1[0] * dy + v1[1] * dx
 #     return A, b
 
-# tt=np.array([[15],[0]]);yy=np.array([[1.5],[5]]);cc=np.array([[1.5],[0]]);dd=np.array([[15],[5]])
 def GetHyperPlaneParam(obj):
     A = np.zeros((len(obj) - 1, 2))
     b = np.zeros((len(obj) - 1, 1))
@@ -246,10 +271,10 @@ def GetHyperPlaneParam(obj):
     return A, b
 
 
-def GetInitialDualVariable(ref_path, obstacles, ego):
+def GetInitialDualVariable(ref_traj, obstacles, ego):
     obs_info = GetObstacleInfo(obstacles)
-    N = ref_path.shape[1]
-    X = ref_path[:3, :]
+    N = ref_traj.shape[1]
+    X = ref_traj[:3, :]
 
     # 定义变量
     opti = ca.Opti()
@@ -305,10 +330,11 @@ def GetInitialDualVariable(ref_path, obstacles, ego):
 
     return ref_L, ref_M
 
-def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=1.0):
+
+def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_traj, ref_input, dt=1.0):
     dmin = 0.5
     obs_info = GetObstacleInfo(obstacles)
-    N = ref_path.shape[1]
+    N = ref_traj.shape[1]
     # 定义变量
     opti = ca.Opti()
     X = opti.variable(4, N)
@@ -320,7 +346,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=1.0):
     # 权重矩阵
     R = ca.diag([0.5, 0.5])
     Rd = ca.diag([0.1, 0.1])
-    Q = ca.diag([5, 5, 5])
+    Q = ca.diag([0.1, 0.1, 0.1, 0.1])
     # 目标函数
     object_function = 0
     for k in range(N - 1):
@@ -330,10 +356,9 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=1.0):
             [((U[:, k] - U[:, k - 1]) / (Ts[k] * dt)).T, Rd, (U[:, k] - U[:, k - 1]) / (Ts[k] * dt)])
     object_function += ca.mtimes([((U[:, 0] - u0) / (Ts[0] * dt)).T, Rd, (U[:, 0] - u0) / ((Ts[0] * dt))])
     for k in range(N):
-        # object_function += (5 * Ts[k] + Ts[k] * Ts[k])
-        object_function += (5 * Ts[k])
+        object_function += (0.5 * Ts[k] + Ts[k] * Ts[k])
     for k in range(N):
-        object_function += ca.mtimes([(X[:3, k] - ref_path[:3, k]).T, Q, X[:3, k] - ref_path[:3, k]])
+        object_function += ca.mtimes([(X[:, k] - ref_traj[:, k]).T, Q, X[:, k] - ref_traj[:, k]])
     opti.minimize(object_function)
 
     # 首末端状态约束
@@ -392,23 +417,19 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_path, ref_input, dt=1.0):
             opti.subject_to(mu >= 0)
 
     # 设置初始值
-    opti.set_initial(X, ref_path)
+    opti.set_initial(X, ref_traj)
     opti.set_initial(U, ref_input)
-    # ref_L, ref_M = GetInitialDualVariable(ref_path, obstacles, ego)
-    # opti.set_initial(L, ref_L)
-    # opti.set_initial(M, ref_M)
-    # opti.set_initial(L, np.ones((obs_info["vnum"], N)))
-    # opti.set_initial(M, np.ones((obs_info['num'] * 4, N)))
-    opti.set_initial(Ts, 0.05*np.ones((1, N)))
+    ref_L, ref_M = GetInitialDualVariable(ref_traj, obstacles, ego)
+    opti.set_initial(L, ref_L)
+    opti.set_initial(M, ref_M)
+    opti.set_initial(Ts, 0.05 * np.ones((1, N)))
     # 设置求解器
     options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
                'ipopt.acceptable_obj_change_tol': 1e-6}
-    opti.solver('ipopt')
+    opti.solver('ipopt', options)
     sol = opti.solve()
-    trajectory = sol.value(X)
-    input = sol.value(U)
-    dT = sol.value(Ts)
-    return trajectory, input, dT
+    return sol.value(X), sol.value(U), sol.value(Ts)
+
 
 if __name__ == '__main__':
     sys.path.append(str(pathlib.Path(__file__).parent.parent))
@@ -459,8 +480,8 @@ if __name__ == '__main__':
                  # [(-0, 10), (-0, 13), (2, 13), (2, 10), (-0, 10)],
                  ]
 
-    ref_path, ref_input = GetReferenceFromHybirdAStar(path, ego, x0, dt)
-    trajectory, input = planning(x0, xF, u0, ego, XYBound, obstacles, ref_path, ref_input, dt)
+    ref_traj, ref_input = GetReferenceFromHybirdAStar(path, ego, x0, dt)
+    trajectory, input = planning(x0, xF, u0, ego, XYBound, obstacles, ref_traj, ref_input, dt)
 
     x = trajectory[0]
     y = trajectory[1]

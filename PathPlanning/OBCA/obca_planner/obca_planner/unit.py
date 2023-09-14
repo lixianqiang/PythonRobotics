@@ -16,6 +16,8 @@ def CalcDistance(p1, p2):
 
 def CalcCurvature(curr_p, prev_p, next_p):
     denominator = CalcDistance(prev_p, curr_p) * CalcDistance(curr_p, next_p) * CalcDistance(prev_p, next_p)
+    if math.fabs(denominator) < 1e-6:
+        return 0
     return 2.0 * ((curr_p[0] - prev_p[0]) * (next_p[1] - prev_p[1]) - (curr_p[1] - prev_p[1]) * (
             next_p[0] - prev_p[0])) / denominator
 
@@ -41,20 +43,29 @@ def IsShiftPoint(curr_p, prev_p, next_p):
 #     yaw_radians = math.atan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
 #     return yaw_radians
 
-def ConvertQuaternionToYaw(quaternion):
-    x, y, z, w = quaternion
-    t0 = +2.0 * (w * z + x * y)
-    t1 = +1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(t0, t1)
-    return yaw
+# def ConvertQuaternionToYaw(quaternion):
+#     x, y, z, w = quaternion
+#     t0 = +2.0 * (w * z + x * y)
+#     t1 = +1.0 - 2.0 * (y * y + z * z)
+#     yaw = math.atan2(t0, t1)
+#     return yaw
+#
+# def ConvertYawToQuaternion(yaw):
+#     quaternion = [0.0, 0.0, 0.0, 0.0]
+#     quaternion[0] = 0.0
+#     quaternion[1] = 0.0
+#     quaternion[2] = math.sin(yaw / 2.0)
+#     quaternion[3] = math.cos(yaw / 2.0)
+#     return quaternion
 
+import tf_transformations
+
+def ConvertQuaternionToYaw(quaternion):
+    _, _, yaw = tf_transformations.euler_from_quaternion(quaternion)
+    return yaw
 def ConvertYawToQuaternion(yaw):
-    quaternion = [0.0, 0.0, 0.0, 0.0]
-    quaternion[0] = 0.0
-    quaternion[1] = 0.0
-    quaternion[2] = math.sin(yaw / 2.0)
-    quaternion[3] = math.cos(yaw / 2.0)
-    return quaternion
+    quat = tf_transformations.quaternion_from_euler(0, 0, yaw)
+    return quat
 
 def ExtractRectangularContourPoints(center_pose, contour_shape):
     x, y, theta = center_pose[0], center_pose[1], center_pose[2]
@@ -87,4 +98,3 @@ if __name__ == '__main__':
     angdiff = AngleDiff(yaw2, yaw1)
     angdiff_deg = np.rad2deg(angdiff)
     a = 0
-

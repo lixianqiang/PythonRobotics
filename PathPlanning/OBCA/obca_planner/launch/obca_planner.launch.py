@@ -4,7 +4,8 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    vehicle_info_param_path = '/home/stephen_li/autoware/src/vehicle/sample_vehicle_launch/sample_vehicle_description/config/vehicle_info.param.yaml'
+    vehicle_info_param_path = '/home/stephen_li/autoware/src/vehicle/robobus_launch/robobus_description/config/vehicle_info.param.yaml'
+    # vehicle_info_param_path = '/home/stephen_li/autoware/src/vehicle/sample_vehicle_launch/sample_vehicle_description/config/vehicle_info.param.yaml'
     # vehicle_info_param_path = '/home/用户名/autoware/src/vehicle/sample_vehicle_launch/sample_vehicle_description/config/vehicle_info.param.yaml'
 
     with open(vehicle_info_param_path, "r") as f:

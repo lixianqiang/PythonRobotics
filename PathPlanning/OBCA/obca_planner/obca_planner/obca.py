@@ -174,7 +174,7 @@ def CalculateReferenceInput(ref_traj, ego):
     for i in range(1, len(vel_list) - 1):
         if (vel_list[i - 1] * vel_list[i] < 0):
             orientation = -1 * orientation
-            steer_list.append(0)
+            steer_list.append(steer_list[-1])
         else:
             p1 = [x_list[i - 1], y_list[i - 1]]
             p2 = [x_list[i], y_list[i]]

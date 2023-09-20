@@ -422,7 +422,7 @@ def planning(x0, xF, u0, ego, XYbounds, obstacles, ref_traj, ref_input, dt=1.0):
     ref_L, ref_M = GetInitialDualVariable(ref_traj, obstacles, ego)
     opti.set_initial(L, ref_L)
     opti.set_initial(M, ref_M)
-    opti.set_initial(Ts, 0.05 * np.ones((1, N)))
+    opti.set_initial(Ts, dt * np.ones((1, N)))
     # 设置求解器
     options = {'ipopt.max_iter': 2000, 'ipopt.print_level': 0, 'print_time': 0, 'ipopt.acceptable_tol': 1e-8,
                'ipopt.acceptable_obj_change_tol': 1e-6}

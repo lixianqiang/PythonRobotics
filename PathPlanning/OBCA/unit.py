@@ -53,11 +53,7 @@ def ConvertYawToQuaternion(yaw):
     return quaternion
 
 
-def list2coord(obj):
-    tf_obj = []
-    for xy in zip(obj[0], obj[1]):
-        tf_obj.append(xy)
-    return tf_obj
+
 
 
 if __name__ == '__main__':

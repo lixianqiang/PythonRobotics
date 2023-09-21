@@ -281,17 +281,11 @@ def planning(x0, xF, u0, ego, map, obstacles, ref_traj, ref_input, dt=1.0):
     return sol.value(X), sol.value(U), sol.value(Ts)
 
 
-def map2obstacle(map):
-    obs_list = []
-    for i in range(1, len(map)):
-        obs_list.append([map[i - 1], map[i]])
-    return obs_list
-
-
 if __name__ == '__main__':
     sys.path.append(str(pathlib.Path(__file__).parent.parent))
     from PathPlanning.HybridAStar.hybrid_a_star import *
     from PathPlanning.CubicSpline.spline_continuity import *
+
 
     def plot(start, goal, map, obs_list, path=None, trajectory=None):
         global show_animation
@@ -413,6 +407,20 @@ if __name__ == '__main__':
             ref_traj[3, i] = vel_list[i]
 
         return ref_traj
+
+
+    def map2obstacle(map):
+        obs_list = []
+        for i in range(1, len(map)):
+            obs_list.append([map[i - 1], map[i]])
+        return obs_list
+
+
+    def list2coord(obj):
+        tf_obj = []
+        for xy in zip(obj[0], obj[1]):
+            tf_obj.append(xy)
+        return tf_obj
 
 
     dt = 0.2

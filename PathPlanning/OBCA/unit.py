@@ -2,9 +2,6 @@ import numpy as np
 import math
 
 
-# import tf_transformations
-
-
 def AngleDiff(endAngle, startAngle):
     deltaAngle = endAngle - startAngle
     abs_deltaAngle = np.fabs(deltaAngle)
@@ -54,38 +51,6 @@ def ConvertYawToQuaternion(yaw):
     quaternion[2] = math.sin(yaw / 2.0)
     quaternion[3] = math.cos(yaw / 2.0)
     return quaternion
-
-
-# def ConvertQuaternionToYaw(quaternion):
-#     _, _, yaw = tf_transformations.euler_from_quaternion(quaternion)
-#     return yaw
-
-
-# def ConvertYawToQuaternion(yaw):
-#     quat = tf_transformations.quaternion_from_euler(0, 0, yaw)
-#     return quat
-
-
-def ExtractRectangularContourPoints(center_pose, contour_shape):
-    x, y, theta = center_pose[0], center_pose[1], center_pose[2]
-    length, width = contour_shape[0], contour_shape[1]
-    half_width = width / 2
-    half_length = length / 2
-
-    x_bottom_left = x - half_length * math.cos(theta) - half_width * math.sin(theta)
-    y_bottom_left = y - half_length * math.sin(theta) + half_width * math.cos(theta)
-
-    x_top_left = x + half_length * math.cos(theta) - half_width * math.sin(theta)
-    y_top_left = y + half_length * math.sin(theta) + half_width * math.cos(theta)
-
-    x_top_right = x + half_length * math.cos(theta) + half_width * math.sin(theta)
-    y_top_right = y + half_length * math.sin(theta) - half_width * math.cos(theta)
-
-    x_bottom_right = x - half_length * math.cos(theta) + half_width * math.sin(theta)
-    y_bottom_right = y - half_length * math.sin(theta) - half_width * math.cos(theta)
-
-    return [(x_top_left, y_top_left), (x_top_right, y_top_right), (x_bottom_right, y_bottom_right),
-            (x_bottom_left, y_bottom_left), (x_top_left, y_top_left)]
 
 
 def list2coord(obj):
